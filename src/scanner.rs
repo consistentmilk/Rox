@@ -1,0 +1,124 @@
+use std::iter::FusedIterator;
+
+use crate::token::{Token, TokenType};
+
+#[derive(Debug, Clone)]
+pub struct Scanner<'a> {
+    source: &'a [u8],
+    start: usize,
+    curr_ptr: usize,
+    line: usize,
+    had_error: bool,
+    pending_token: Option<TokenType>,
+}
+
+impl<'a> Scanner<'a> {
+    pub fn new(buf: &'a [u8]) -> Self {
+        Self {
+            source: buf,
+            start: 0,
+            curr_ptr: 0,
+            line: 1,
+            had_error: false,
+            pending_token: None,
+        }
+    }
+
+    #[inline]
+    const fn len(&self) -> usize {
+        self.source.len()
+    }
+
+    fn scan_token(&mut self) -> Result<(), String> {
+        let byte: u8 = self.advance();
+
+        match byte {
+            b'(' => self.add_token(TokenType::LEFT_PAREN),
+            b')' => self.add_token(TokenType::RIGHT_PAREN),
+
+            _ => {}
+        }
+
+        Ok(())
+    }
+
+    ///
+    /// Set the current pending_token as the given token type.
+    ///
+    /// This allows us to consume this Token through the Iterator API.
+    ///
+    #[inline]
+    fn add_token(&mut self, token_type: TokenType) {
+        self.pending_token = Some(token_type);
+    }
+
+    ///
+    /// Temporarily stores the current byte.
+    ///
+    /// Advances the buffer pointer by 1, pointing to the next byte in the stream
+    ///
+    /// Returns the stored byte.
+    ///
+    #[inline]
+    fn advance(&mut self) -> u8 {
+        let byte = self.source[self.curr_ptr];
+        self.curr_ptr += 1;
+
+        byte
+    }
+
+    #[inline]
+    fn is_at_end(&self) -> bool {
+        self.curr_ptr >= self.len()
+    }
+}
+
+impl<'a> Iterator for Scanner<'a> {
+    type Item = Result<Token<'a>, String>;
+
+    ///
+    /// ------- Part 1: Buffer Proces State -------
+    /// - If the buffer pointer is at the end of file
+    ///    - If the pointer is equal to the length of buffer
+    ///         - Increment the pointer by 1 to indicate buffer was fully processed.
+    ///         - Return Option<Result<Token(EOF)>>
+    ///    - Else always return None (In general, Rust iterators are expected to always return None when it is fully consumed)
+    ///
+    /// ------- Part 2: Scan Current Token -------
+    /// - Set self.pending_token = None ()
+    ///
+    ///
+    ///
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.is_at_end() {
+            if self.curr_ptr == self.len() {
+                self.curr_ptr += 1;
+                return Some(Ok(Token::new(TokenType::EOF, "", self.line)));
+            }
+
+            return None;
+        }
+
+        self.pending_token = None;
+        self.start = self.curr_ptr;
+
+        let result: Result<(), String> = self.scan_token();
+
+        if let Err(e) = result {
+            self.had_error = true;
+
+            return Some(Err(e));
+        }
+
+        if let Some(token_type) = self.pending_token.take() {
+            let lexeme =
+                unsafe { std::str::from_utf8_unchecked(&self.source[self.start..self.curr_ptr]) };
+
+            Some(Ok(Token::new(token_type, lexeme, self.line)))
+        } else {
+            self.next() // Recursively keep calling next until EOF is reached
+        }
+    }
+}
+
+impl<'a> FusedIterator for Scanner<'a> {}
