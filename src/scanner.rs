@@ -34,7 +34,12 @@ impl<'a> Scanner<'a> {
 
         match byte {
             b'(' => self.add_token(TokenType::LEFT_PAREN),
+
             b')' => self.add_token(TokenType::RIGHT_PAREN),
+
+            b'{' => self.add_token(TokenType::LEFT_BRACE),
+
+            b'}' => self.add_token(TokenType::RIGHT_BRACE),
 
             _ => {}
         }
