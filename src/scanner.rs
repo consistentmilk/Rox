@@ -111,6 +111,8 @@ impl<'a> Scanner<'a> {
 
             b'"' => self.parse_string()?,
 
+            b'0'..=b'9' => self.parse_number()?,
+
             _ => {
                 self.had_error = true;
 
@@ -149,6 +151,29 @@ impl<'a> Scanner<'a> {
         };
 
         self.add_token(TokenType::STRING(parsed_string));
+
+        Ok(())
+    }
+
+    fn parse_number(&mut self) -> Result<(), String> {
+        while self.peek().is_ascii_digit() {
+            self.advance();
+        }
+
+        if self.peek() == b'.' && self.peek_next().is_ascii_digit() {
+            self.advance(); // Consumes the "."
+
+            while self.peek().is_ascii_digit() {
+                self.advance();
+            }
+        }
+
+        let parsed_number: String =
+            unsafe { String::from_utf8_unchecked(self.source[self.start..self.curr_ptr].to_vec()) };
+
+        let number: f64 = parsed_number.parse().unwrap_or(0.0);
+
+        self.add_token(TokenType::NUMBER(number));
 
         Ok(())
     }
@@ -202,6 +227,19 @@ impl<'a> Scanner<'a> {
             0
         } else {
             self.source[self.curr_ptr]
+        }
+    }
+
+    ///
+    /// If the next index is valid for the buffer,
+    /// returns the copy of the next byte.
+    ///
+    #[inline]
+    fn peek_next(&mut self) -> u8 {
+        if self.curr_ptr + 1 >= self.len() {
+            0
+        } else {
+            self.source[self.curr_ptr + 1]
         }
     }
 
