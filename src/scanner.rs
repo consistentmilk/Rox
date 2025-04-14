@@ -109,6 +109,8 @@ impl<'a> Scanner<'a> {
                 }
             }
 
+            b'"' => self.parse_string()?,
+
             _ => {
                 self.had_error = true;
 
@@ -118,6 +120,34 @@ impl<'a> Scanner<'a> {
                 ));
             }
         }
+
+        Ok(())
+    }
+
+    fn parse_string(&mut self) -> Result<(), String> {
+        while !self.is_at_end() && self.peek() != b'"' {
+            if self.peek() == b'\n' {
+                self.line += 1;
+            }
+
+            self.advance();
+        }
+
+        if self.is_at_end() {
+            self.had_error = true;
+
+            return Err(format!("[line {}] Error: Unterminated string.", self.line));
+        }
+
+        self.advance();
+
+        // This is safe, because the unterminated string variant is returned as an
+        // error beforehand. So, at this point (self.start..self.curr_ptr) bytes
+        // will always represent a valid UTF-8 encoded string value.
+        let parsed_string: String =
+            unsafe { String::from_utf8_unchecked(self.source[self.start..self.curr_ptr].to_vec()) };
+
+        self.add_token(TokenType::STRING(parsed_string));
 
         Ok(())
     }
