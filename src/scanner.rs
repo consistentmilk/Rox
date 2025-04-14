@@ -41,7 +41,28 @@ impl<'a> Scanner<'a> {
 
             b'}' => self.add_token(TokenType::RIGHT_BRACE),
 
-            _ => {}
+            b',' => self.add_token(TokenType::COMMA),
+
+            b'.' => self.add_token(TokenType::DOT),
+
+            b'-' => self.add_token(TokenType::MINUS),
+
+            b'+' => self.add_token(TokenType::PLUS),
+
+            b';' => self.add_token(TokenType::SEMICOLON),
+
+            b'/' => self.add_token(TokenType::SLASH),
+
+            b'*' => self.add_token(TokenType::STAR),
+
+            _ => {
+                self.had_error = true;
+
+                return Err(format!(
+                    "[line {}] Error: Unexpected token: {}",
+                    self.line, byte as char
+                ));
+            }
         }
 
         Ok(())
