@@ -56,7 +56,7 @@ impl<'a> Scanner<'a> {
             b'*' => self.add_token(TokenType::STAR),
 
             b'!' => {
-                let token_type = if self.match_byte(b'=') {
+                let token_type: TokenType = if self.match_byte(b'=') {
                     TokenType::BANG_EQUAL
                 } else {
                     TokenType::BANG
@@ -66,10 +66,30 @@ impl<'a> Scanner<'a> {
             }
 
             b'=' => {
-                let token_type = if self.match_byte(b'=') {
+                let token_type: TokenType = if self.match_byte(b'=') {
                     TokenType::EQUAL_EQUAL
                 } else {
                     TokenType::EQUAL
+                };
+
+                self.add_token(token_type);
+            }
+
+            b'<' => {
+                let token_type: TokenType = if self.match_byte(b'=') {
+                    TokenType::LESS_EQUAL
+                } else {
+                    TokenType::LESS
+                };
+
+                self.add_token(token_type);
+            }
+
+            b'>' => {
+                let token_type: TokenType = if self.match_byte(b'=') {
+                    TokenType::GREATER_EQUAL
+                } else {
+                    TokenType::GREATER
                 };
 
                 self.add_token(token_type);
