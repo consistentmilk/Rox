@@ -1,1 +1,2 @@
-/() // Comment
+"foo baz"
+"foo

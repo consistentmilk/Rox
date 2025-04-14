@@ -25,7 +25,7 @@ impl<'a> Scanner<'a> {
     }
 
     #[inline]
-    const fn len(&self) -> usize {
+    pub const fn len(&self) -> usize {
         self.source.len()
     }
 
@@ -142,10 +142,11 @@ impl<'a> Scanner<'a> {
         self.advance();
 
         // This is safe, because the unterminated string variant is returned as an
-        // error beforehand. So, at this point (self.start..self.curr_ptr) bytes
+        // error beforehand. So, at this point (self.start + 1..self.curr_ptr - 1) bytes
         // will always represent a valid UTF-8 encoded string value.
-        let parsed_string: String =
-            unsafe { String::from_utf8_unchecked(self.source[self.start..self.curr_ptr].to_vec()) };
+        let parsed_string: String = unsafe {
+            String::from_utf8_unchecked(self.source[self.start + 1..self.curr_ptr - 1].to_vec())
+        };
 
         self.add_token(TokenType::STRING(parsed_string));
 
