@@ -55,6 +55,16 @@ impl<'a> Scanner<'a> {
 
             b'*' => self.add_token(TokenType::STAR),
 
+            b'!' => {
+                let token_type = if self.match_byte(b'=') {
+                    TokenType::BANG_EQUAL
+                } else {
+                    TokenType::BANG
+                };
+
+                self.add_token(token_type);
+            }
+
             b'=' => {
                 let token_type = if self.match_byte(b'=') {
                     TokenType::EQUAL_EQUAL
