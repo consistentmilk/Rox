@@ -2,6 +2,27 @@ use std::iter::FusedIterator;
 
 use crate::token::{Token, TokenType};
 
+use phf::phf_map;
+
+static KEYWORDS: phf::Map<&'static [u8], TokenType> = phf_map! {
+    b"and" => TokenType::AND,
+    b"class" => TokenType::CLASS,
+    b"else" => TokenType::ELSE,
+    b"false" => TokenType::FALSE,
+    b"fun" => TokenType::FUN,
+    b"for" => TokenType::FOR,
+    b"if" => TokenType::IF,
+    b"nil" => TokenType::NIL,
+    b"or" => TokenType::OR,
+    b"print" => TokenType::PRINT,
+    b"return" => TokenType::RETURN,
+    b"super" => TokenType::SUPER,
+    b"this" => TokenType::THIS,
+    b"true" => TokenType::TRUE,
+    b"var" => TokenType::VAR,
+    b"while" => TokenType::WHILE,
+};
+
 #[derive(Debug, Clone)]
 pub struct Scanner<'a> {
     source: &'a [u8],
@@ -111,7 +132,9 @@ impl<'a> Scanner<'a> {
 
             b'"' => self.parse_string()?,
 
-            b'0'..=b'9' => self.parse_number()?,
+            b'0'..=b'9' => self.parse_number(),
+
+            b'a'..=b'z' | b'A'..b'Z' | b'_' => self.parse_identifier(),
 
             _ => {
                 self.had_error = true;
@@ -155,7 +178,7 @@ impl<'a> Scanner<'a> {
         Ok(())
     }
 
-    fn parse_number(&mut self) -> Result<(), String> {
+    fn parse_number(&mut self) {
         while self.peek().is_ascii_digit() {
             self.advance();
         }
@@ -174,8 +197,20 @@ impl<'a> Scanner<'a> {
         let number: f64 = parsed_number.parse().unwrap_or(0.0);
 
         self.add_token(TokenType::NUMBER(number));
+    }
 
-        Ok(())
+    fn parse_identifier(&mut self) {
+        while self.peek().is_ascii_alphanumeric() || self.peek() == b'_' {
+            self.advance();
+        }
+
+        let text: &str =
+            unsafe { std::str::from_utf8_unchecked(&self.source[self.start..self.curr_ptr]) };
+
+        match KEYWORDS.get(text.as_bytes()) {
+            Some(token_type) => self.add_token(token_type.clone()),
+            None => self.add_token(TokenType::IDENTIFIER),
+        }
     }
 
     ///
