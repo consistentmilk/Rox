@@ -76,8 +76,8 @@ mod scanner_tests {
 
         for err in results.iter().filter_map(|r| r.as_ref().err()) {
             assert!(
-                err.contains("Unexpected token"),
-                "Error message should contain 'Unexpected token', got: {}",
+                err.contains("Unexpected character"),
+                "Error message should contain 'Unexpected character', got: {}",
                 err
             );
         }

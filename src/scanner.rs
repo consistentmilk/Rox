@@ -59,7 +59,7 @@ impl<'a> Scanner<'a> {
                 self.had_error = true;
 
                 return Err(format!(
-                    "[line {}] Error: Unexpected token: {}",
+                    "[line {}] Error: Unexpected character: {}",
                     self.line, byte as char
                 ));
             }
