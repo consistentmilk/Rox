@@ -47,6 +47,7 @@ pub enum TokenType {
     VAR,
     WHILE,
 
+    // Special Characters
     EOF,
 }
 
