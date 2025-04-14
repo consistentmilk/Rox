@@ -51,8 +51,6 @@ impl<'a> Scanner<'a> {
 
             b';' => self.add_token(TokenType::SEMICOLON),
 
-            b'/' => self.add_token(TokenType::SLASH),
-
             b'*' => self.add_token(TokenType::STAR),
 
             b'!' => {
@@ -93,6 +91,22 @@ impl<'a> Scanner<'a> {
                 };
 
                 self.add_token(token_type);
+            }
+
+            b' ' | b'\r' | b'\t' => {}
+
+            b'\n' => {
+                self.line += 1;
+            }
+
+            b'/' => {
+                if self.match_byte(b'/') {
+                    while self.peek() != b'\n' && !self.is_at_end() {
+                        self.advance();
+                    }
+                } else {
+                    self.add_token(TokenType::SLASH);
+                }
             }
 
             _ => {
@@ -145,6 +159,18 @@ impl<'a> Scanner<'a> {
         } else {
             self.curr_ptr += 1;
             true
+        }
+    }
+
+    ///
+    /// Returns a copy of the byte at current position
+    ///
+    #[inline]
+    fn peek(&mut self) -> u8 {
+        if self.is_at_end() {
+            0
+        } else {
+            self.source[self.curr_ptr]
         }
     }
 
