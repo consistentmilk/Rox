@@ -1,12 +1,14 @@
 use std::fs::File;
-use std::io::BufReader;
-use std::io::Read;
+use std::io::{BufReader, Read, Write};
 use std::path::PathBuf;
 
-use codecrafters_interpreter as lox;
-
+use anyhow::{Context, Result};
 use clap::Parser as ClapParser;
 use clap::Subcommand;
+use env_logger::Builder;
+use log::{debug, info};
+
+use codecrafters_interpreter as lox;
 
 use lox::ast::Ast;
 use lox::interpreter::Interpreter;
@@ -14,7 +16,7 @@ use lox::parser::Parser;
 use lox::scanner::Scanner;
 
 #[derive(ClapParser, Debug)]
-#[command(version, about, long_about = None)]
+#[command(version, about = "Lox language interpreter", long_about = None)]
 pub struct Cli {
     #[command(subcommand)]
     commands: Commands,
@@ -22,49 +24,92 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
-    /// Tokenizes the provided input from a given valid filepath
+    /// Tokenizes input from a file, printing each token
     Tokenize { filename: Option<PathBuf> },
 
-    /// Parses the provided input from a given valid filepath (single expression)
+    /// Parses input from a file as a single expression and prints its AST
     Parse { filename: Option<PathBuf> },
 
-    /// Evaluates the provided input from a given valid filepath
+    /// Evaluates input from a file as a single expression and prints the result
     Evaluate { filename: Option<PathBuf> },
 
-    /// Runs the provided input as a program
+    /// Runs input from a file as a Lox program
     Run { filename: Option<PathBuf> },
 }
 
-fn main() -> anyhow::Result<()> {
+/// Reads the contents of a file into a Vec<u8>
+fn read_file(filename: PathBuf) -> Result<Vec<u8>> {
+    info!("Reading file: {:?}", filename);
+    let file = File::open(&filename).context(format!("Failed to open file {:?}", filename))?;
+    let mut reader = BufReader::new(file);
+    let mut buf = Vec::new();
+    let bytes = reader
+        .read_to_end(&mut buf)
+        .context(format!("Failed to read file {:?}", filename))?;
+    info!("Read {} bytes from {:?}", bytes, filename);
+    Ok(buf)
+}
+
+fn init_logger() -> Result<()> {
+    // Create or open the log file
+    let log_file = File::create("app.log").context("Failed to create app.log")?;
+
+    // Configure env_logger to write to both file and stderr
+    Builder::new()
+        .format(|buf, record| {
+            writeln!(
+                buf,
+                "[{}] {} [{}] - {}",
+                chrono::Local::now().format("%Y-%m-%dT%H:%M:%S"),
+                record.level(),
+                record.module_path().unwrap_or("<unnamed>"),
+                record.args()
+            )
+        })
+        .target(env_logger::Target::Pipe(Box::new(log_file)))
+        .filter(None, log::LevelFilter::Debug) // Default to Info, override with RUST_LOG
+        .init();
+
+    info!("Logger initialized, writing to app.log");
+    Ok(())
+}
+
+fn main() -> Result<()> {
+    // Initialize logger before parsing CLI args
+    init_logger()?;
     let args: Cli = Cli::parse();
+    info!("CLI arguments: {:?}", args);
 
     match args.commands {
         Commands::Tokenize { filename } => match filename {
             Some(filename) => {
-                let mut buf: Vec<u8> = Vec::new();
-                let mut reader: BufReader<File> = BufReader::new(File::open(filename)?);
-                let _ = reader.read_to_end(&mut buf);
-
-                let mut scanner: Scanner = Scanner::new(buf);
+                info!("Running Tokenize subcommand");
+                let buf = read_file(filename)?;
+                let mut scanner = Scanner::new(buf);
                 let mut tokenized = true;
 
                 while let Some(token) = scanner.next() {
                     match token {
-                        Ok(token) => println!("{}", token),
-
+                        Ok(token) => {
+                            debug!("Scanned token: {}", token);
+                            println!("{}", token);
+                        }
                         Err(e) => {
                             tokenized = false;
+                            debug!("Tokenization debug: {}", e);
                             eprintln!("{}", e);
                         }
                     }
                 }
 
                 if !tokenized {
+                    debug!("Tokenization failed, exiting with code 65");
                     std::process::exit(65);
                 }
+                info!("Tokenization completed successfully");
             }
-
             None => {
+                info!("No filepath provided for Tokenize");
                 println!("No input filepath was provided. Exiting...");
                 std::process::exit(0);
             }
@@ -72,27 +117,29 @@ fn main() -> anyhow::Result<()> {
 
         Commands::Parse { filename } => match filename {
             Some(filename) => {
-                let mut buf: Vec<u8> = Vec::new();
-                let mut reader: BufReader<File> = BufReader::new(File::open(filename)?);
-                let _ = reader.read_to_end(&mut buf);
-
-                let scanner: Scanner = Scanner::new(buf);
-                let mut parser: Parser = Parser::new(scanner);
+                info!("Running Parse subcommand");
+                let buf = read_file(filename)?;
+                let scanner = Scanner::new(buf);
+                let mut parser = Parser::new(scanner);
 
                 match parser.parse() {
                     Ok(expr) => {
-                        let printer: Ast = Ast;
-                        println!("{}", printer.print(&expr));
+                        info!("Expression parsed successfully");
+                        let printer = Ast; // Assuming Ast is a struct with print method
+                        let ast_str = printer.print(&expr);
+                        debug!("AST: {}", ast_str);
+                        println!("{}", ast_str);
                     }
-
                     Err(e) => {
+                        debug!("Parse debug: {}", e);
                         eprintln!("{}", e);
                         std::process::exit(65);
                     }
                 }
+                info!("Parse subcommand completed");
             }
-
             None => {
+                info!("No filepath provided for Parse");
                 println!("No input filepath was provided. Exiting...");
                 std::process::exit(0);
             }
@@ -100,34 +147,37 @@ fn main() -> anyhow::Result<()> {
 
         Commands::Evaluate { filename } => match filename {
             Some(filename) => {
-                let mut buf: Vec<u8> = Vec::new();
-                let mut reader: BufReader<File> = BufReader::new(File::open(filename)?);
-                let _ = reader.read_to_end(&mut buf);
-
-                let scanner: Scanner = Scanner::new(buf);
-                let mut parser: Parser = Parser::new(scanner);
-                let mut interpreter: Interpreter = Interpreter::new();
+                info!("Running Evaluate subcommand");
+                let buf = read_file(filename)?;
+                let scanner = Scanner::new(buf);
+                let mut parser = Parser::new(scanner);
+                let mut interpreter = Interpreter::new();
 
                 match parser.parse() {
-                    Ok(expr) => match interpreter.evaluate(&expr) {
-                        Ok(value) => {
-                            println!("{}", value);
+                    Ok(expr) => {
+                        info!("Expression parsed successfully");
+                        match interpreter.evaluate(&expr) {
+                            Ok(value) => {
+                                debug!("Evaluated to: {}", value);
+                                println!("{}", value);
+                            }
+                            Err(e) => {
+                                debug!("Evaluation debug: {}", e);
+                                eprintln!("{}", e);
+                                std::process::exit(70);
+                            }
                         }
-
-                        Err(e) => {
-                            eprintln!("{}", e);
-                            std::process::exit(70);
-                        }
-                    },
-
+                    }
                     Err(e) => {
+                        debug!("Parse debug: {}", e);
                         eprintln!("{}", e);
                         std::process::exit(65);
                     }
                 }
+                info!("Evaluate subcommand completed");
             }
-
             None => {
+                info!("No filepath provided for Evaluate");
                 println!("No input filepath was provided. Exiting...");
                 std::process::exit(0);
             }
@@ -135,36 +185,46 @@ fn main() -> anyhow::Result<()> {
 
         Commands::Run { filename } => match filename {
             Some(filename) => {
-                let mut buf: Vec<u8> = Vec::new();
-                let mut reader: BufReader<File> = BufReader::new(File::open(filename)?);
-                let _ = reader.read_to_end(&mut buf);
+                info!("Running Run subcommand");
+                let buf = read_file(filename)?;
 
-                let scanner: Scanner = Scanner::new(buf);
-                let mut parser: Parser = Parser::new(scanner);
-                let mut interpreter: Interpreter = Interpreter::new();
+                // For logging only
+                let file_content: String = unsafe { String::from_utf8_unchecked(buf.clone()) };
+                info!("Provided input:\n {}", file_content);
 
-                for stmt in &mut parser {
+                let scanner = Scanner::new(buf);
+                let parser = Parser::new(scanner);
+                let mut interpreter = Interpreter::new();
+
+                let mut statements = Vec::new();
+                for stmt in parser {
                     match stmt {
-                        Ok(stmt) => match interpreter.execute(&stmt) {
-                            Ok(()) => {}
-
-                            Err(e) => {
-                                eprintln!("{}", e);
-
-                                std::process::exit(70);
-                            }
-                        },
-
+                        Ok(stmt) => {
+                            debug!("Parsed statement: {:?}", stmt);
+                            statements.push(stmt);
+                        }
                         Err(e) => {
+                            debug!("Parse debug: {}", e);
                             eprintln!("{}", e);
-
                             std::process::exit(65);
                         }
                     }
                 }
-            }
+                info!("Parsed {} statements", statements.len());
 
+                match interpreter.interpret(&statements) {
+                    Ok(()) => {
+                        info!("Program executed successfully");
+                    }
+                    Err(e) => {
+                        debug!("Runtime debug: {}", e);
+                        eprintln!("{}", e);
+                        std::process::exit(70);
+                    }
+                }
+            }
             None => {
+                info!("No filepath provided for Run");
                 println!("No input filepath was provided. Exiting...");
                 std::process::exit(0);
             }

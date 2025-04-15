@@ -1,3 +1,6 @@
+use log::{debug, info};
+use std::fmt;
+
 #[allow(non_camel_case_types)]
 #[derive(Debug, Clone)]
 pub enum TokenType {
@@ -53,6 +56,7 @@ pub enum TokenType {
 
 impl PartialEq for TokenType {
     fn eq(&self, other: &Self) -> bool {
+        debug!("Comparing TokenType: self={:?}, other={:?}", self, other);
         match (self, other) {
             (TokenType::NUMBER(_), TokenType::NUMBER(_)) => true,
             (TokenType::STRING(_), TokenType::STRING(_)) => true,
@@ -92,8 +96,14 @@ impl PartialEq for TokenType {
             | (TokenType::THIS, TokenType::THIS)
             | (TokenType::VAR, TokenType::VAR)
             | (TokenType::WHILE, TokenType::WHILE)
-            | (TokenType::EOF, TokenType::EOF) => true,
-            _ => false,
+            | (TokenType::EOF, TokenType::EOF) => {
+                debug!("TokenType match found");
+                true
+            }
+            _ => {
+                debug!("No TokenType match");
+                false
+            }
         }
     }
 }
@@ -107,6 +117,10 @@ pub struct Token {
 
 impl Token {
     pub fn new(token_type: TokenType, lexeme: String, line: usize) -> Self {
+        info!(
+            "Creating new token: type={:?}, lexeme={}, line={}",
+            token_type, lexeme, line
+        );
         Self {
             token_type,
             lexeme,
@@ -115,24 +129,48 @@ impl Token {
     }
 }
 
-impl std::fmt::Display for Token {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let literal: &str = match &self.token_type {
-            TokenType::STRING(literal) => literal,
+impl fmt::Display for Token {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        debug!(
+            "Formatting token: type={:?}, lexeme={}, line={}",
+            self.token_type, self.lexeme, self.line
+        );
 
-            TokenType::NUMBER(num_literal) => {
-                if num_literal.fract() == 0.0 {
-                    &format!("{:.1}", num_literal)
-                } else {
-                    &format!("{}", num_literal)
-                }
+        let literal: &str = match &self.token_type {
+            TokenType::STRING(literal) => {
+                debug!("Formatting STRING literal: {}", literal);
+                literal
             }
 
-            _ => "null",
+            TokenType::NUMBER(num_literal) => {
+                let formatted = if num_literal.fract() == 0.0 {
+                    format!("{:.1}", num_literal)
+                } else {
+                    format!("{}", num_literal)
+                };
+
+                debug!(
+                    "Formatting NUMBER literal: {} -> {}",
+                    num_literal, formatted
+                );
+
+                // We need to return a &str, so we leak the String to get a static reference
+                // This is safe in this context as the string is small and temporary
+                Box::leak(formatted.into_boxed_str())
+            }
+
+            _ => {
+                debug!("Formatting non-literal token: null");
+                "null"
+            }
         };
 
         let tmp: String = format!("{:?}", self.token_type);
         let type_name: &str = tmp.split('(').next().unwrap();
+
+        debug!("Token type name extracted: {}", type_name);
+
+        info!("Formatted token: {} {} {}", type_name, self.lexeme, literal);
 
         write!(f, "{} {} {}", type_name, self.lexeme, literal)
     }

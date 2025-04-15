@@ -15,6 +15,8 @@ pub enum Value {
     String(String),
     Bool(bool),
     Nil,
+
+    Return(Box<Value>),
 }
 
 impl std::fmt::Display for Value {
@@ -23,6 +25,8 @@ impl std::fmt::Display for Value {
             Value::Function { name, .. } => write!(f, "<fn {}>", name),
 
             Value::NativeFunction { name, .. } => write!(f, "<native fn {}>", name),
+
+            Value::Return(val) => write!(f, "Value: {}", val),
 
             Value::Number(n) => {
                 if n.fract() == 0.0 {
