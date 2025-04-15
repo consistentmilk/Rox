@@ -8,15 +8,25 @@ impl Ast {
             Expr::Binary(left, op, right) => {
                 let op_str = match op.token_type {
                     TokenType::PLUS => "+",
+
                     TokenType::MINUS => "-",
+
                     TokenType::STAR => "*",
+
                     TokenType::SLASH => "/",
+
                     TokenType::BANG_EQUAL => "!=",
+
                     TokenType::EQUAL_EQUAL => "==",
+
                     TokenType::GREATER => ">",
+
                     TokenType::GREATER_EQUAL => ">=",
+
                     TokenType::LESS => "<",
+
                     TokenType::LESS_EQUAL => "<=",
+
                     _ => unreachable!("Invalid binary operator"),
                 };
 
@@ -26,7 +36,9 @@ impl Ast {
             Expr::Unary(op, expr) => {
                 let op_str = match op.token_type {
                     TokenType::MINUS => "-",
+
                     TokenType::BANG => "!",
+
                     _ => unreachable!("Invalid unary operator"),
                 };
 
@@ -42,7 +54,7 @@ impl Ast {
                     }
                 }
 
-                TokenType::STRING(s) => format!("\"{}\"", s),
+                TokenType::STRING(s) => s.to_string(),
 
                 TokenType::TRUE => "true".to_string(),
 
