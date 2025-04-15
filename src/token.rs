@@ -1,5 +1,5 @@
 #[allow(non_camel_case_types)]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub enum TokenType {
     // Single-character tokens.
     LEFT_PAREN,
@@ -49,6 +49,53 @@ pub enum TokenType {
 
     // Special Characters
     EOF,
+}
+
+impl PartialEq for TokenType {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (TokenType::NUMBER(_), TokenType::NUMBER(_)) => true,
+            (TokenType::STRING(_), TokenType::STRING(_)) => true,
+            (TokenType::LEFT_PAREN, TokenType::LEFT_PAREN)
+            | (TokenType::RIGHT_PAREN, TokenType::RIGHT_PAREN)
+            | (TokenType::LEFT_BRACE, TokenType::LEFT_BRACE)
+            | (TokenType::RIGHT_BRACE, TokenType::RIGHT_BRACE)
+            | (TokenType::COMMA, TokenType::COMMA)
+            | (TokenType::DOT, TokenType::DOT)
+            | (TokenType::MINUS, TokenType::MINUS)
+            | (TokenType::PLUS, TokenType::PLUS)
+            | (TokenType::SEMICOLON, TokenType::SEMICOLON)
+            | (TokenType::SLASH, TokenType::SLASH)
+            | (TokenType::STAR, TokenType::STAR)
+            | (TokenType::BANG, TokenType::BANG)
+            | (TokenType::BANG_EQUAL, TokenType::BANG_EQUAL)
+            | (TokenType::EQUAL, TokenType::EQUAL)
+            | (TokenType::EQUAL_EQUAL, TokenType::EQUAL_EQUAL)
+            | (TokenType::GREATER, TokenType::GREATER)
+            | (TokenType::GREATER_EQUAL, TokenType::GREATER_EQUAL)
+            | (TokenType::LESS, TokenType::LESS)
+            | (TokenType::LESS_EQUAL, TokenType::LESS_EQUAL)
+            | (TokenType::IDENTIFIER, TokenType::IDENTIFIER)
+            | (TokenType::TRUE, TokenType::TRUE)
+            | (TokenType::FALSE, TokenType::FALSE)
+            | (TokenType::NIL, TokenType::NIL)
+            | (TokenType::AND, TokenType::AND)
+            | (TokenType::CLASS, TokenType::CLASS)
+            | (TokenType::ELSE, TokenType::ELSE)
+            | (TokenType::FUN, TokenType::FUN)
+            | (TokenType::FOR, TokenType::FOR)
+            | (TokenType::IF, TokenType::IF)
+            | (TokenType::OR, TokenType::OR)
+            | (TokenType::PRINT, TokenType::PRINT)
+            | (TokenType::RETURN, TokenType::RETURN)
+            | (TokenType::SUPER, TokenType::SUPER)
+            | (TokenType::THIS, TokenType::THIS)
+            | (TokenType::VAR, TokenType::VAR)
+            | (TokenType::WHILE, TokenType::WHILE)
+            | (TokenType::EOF, TokenType::EOF) => true,
+            _ => false,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

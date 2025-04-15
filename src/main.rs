@@ -8,6 +8,8 @@ use codecrafters_interpreter as lox;
 use clap::Parser as ClapParser;
 use clap::Subcommand;
 
+use lox::ast::Ast;
+use lox::parser::Parser;
 use lox::scanner::Scanner;
 
 #[derive(ClapParser, Debug)]
@@ -21,6 +23,9 @@ pub struct Cli {
 enum Commands {
     /// Tokenizes the provided input from a given valid filepath
     Tokenize { filename: Option<PathBuf> },
+
+    /// Parses the provided input from a given valid filepath
+    Parse { filename: Option<PathBuf> },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -42,7 +47,6 @@ fn main() -> anyhow::Result<()> {
 
                         Err(e) => {
                             tokenized = false;
-
                             eprintln!("{}", e);
                         }
                     }
@@ -55,7 +59,34 @@ fn main() -> anyhow::Result<()> {
 
             None => {
                 println!("No input filepath was provided. Exiting...");
-                std::process::exit(0)
+                std::process::exit(0);
+            }
+        },
+
+        Commands::Parse { filename } => match filename {
+            Some(filename) => {
+                let mut buf: Vec<u8> = Vec::new();
+                let mut reader: BufReader<File> = BufReader::new(File::open(filename)?);
+                let _ = reader.read_to_end(&mut buf);
+
+                let scanner: Scanner = Scanner::new(&buf);
+                let mut parser: Parser = Parser::new(scanner);
+
+                match parser.parse() {
+                    Ok(expr) => {
+                        let printer = Ast;
+                        println!("{}", printer.print(&expr));
+                    }
+                    Err(e) => {
+                        eprintln!("{}", e);
+                        std::process::exit(65);
+                    }
+                }
+            }
+
+            None => {
+                println!("No input filepath was provided. Exiting...");
+                std::process::exit(0);
             }
         },
     }
