@@ -9,6 +9,7 @@ use clap::Parser as ClapParser;
 use clap::Subcommand;
 
 use lox::ast::Ast;
+use lox::interpreter::Interpreter;
 use lox::parser::Parser;
 use lox::scanner::Scanner;
 
@@ -24,8 +25,14 @@ enum Commands {
     /// Tokenizes the provided input from a given valid filepath
     Tokenize { filename: Option<PathBuf> },
 
-    /// Parses the provided input from a given valid filepath
+    /// Parses the provided input from a given valid filepath (single expression)
     Parse { filename: Option<PathBuf> },
+
+    /// Parses the provided input as statements
+    ParseStmts { filename: Option<PathBuf> },
+
+    /// Evaluates the provided input from a Taxes given valid filepath
+    Evaluate { filename: Option<PathBuf> },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -44,7 +51,6 @@ fn main() -> anyhow::Result<()> {
                 while let Some(token) = scanner.next() {
                     match token {
                         Ok(token) => println!("{}", token),
-
                         Err(e) => {
                             tokenized = false;
                             eprintln!("{}", e);
@@ -71,12 +77,84 @@ fn main() -> anyhow::Result<()> {
 
                 let scanner: Scanner = Scanner::new(&buf);
                 let mut parser: Parser = Parser::new(scanner);
-
                 match parser.parse() {
                     Ok(expr) => {
-                        let printer = Ast;
+                        let printer: Ast = Ast;
                         println!("{}", printer.print(&expr));
                     }
+                    Err(e) => {
+                        eprintln!("{}", e);
+                        std::process::exit(65);
+                    }
+                }
+            }
+
+            None => {
+                println!("No input filepath was provided. Exiting...");
+                std::process::exit(0);
+            }
+        },
+
+        Commands::ParseStmts { filename } => match filename {
+            Some(filename) => {
+                let mut buf: Vec<u8> = Vec::new();
+                let mut reader: BufReader<File> = BufReader::new(File::open(filename)?);
+                let _ = reader.read_to_end(&mut buf);
+
+                let scanner: Scanner = Scanner::new(&buf);
+                let mut parser: Parser = Parser::new(scanner);
+                let printer: Ast = Ast;
+                let mut parsed: bool = true;
+
+                for stmt in &mut parser {
+                    match stmt {
+                        Ok(stmt) => match stmt {
+                            lox::stmt::Stmt::Expression(expr) => {
+                                println!("expr: {}", printer.print(&expr))
+                            }
+                            lox::stmt::Stmt::Print(expr) => {
+                                println!("print: {}", printer.print(&expr))
+                            }
+                        },
+
+                        Err(e) => {
+                            parsed = false;
+                            eprintln!("{}", e);
+                        }
+                    }
+                }
+
+                if !parsed {
+                    std::process::exit(65);
+                }
+            }
+
+            None => {
+                println!("No input filepath was provided. Exiting...");
+                std::process::exit(0);
+            }
+        },
+
+        Commands::Evaluate { filename } => match filename {
+            Some(filename) => {
+                let mut buf: Vec<u8> = Vec::new();
+                let mut reader: BufReader<File> = BufReader::new(File::open(filename)?);
+                let _ = reader.read_to_end(&mut buf);
+
+                let scanner: Scanner = Scanner::new(&buf);
+                let mut parser: Parser = Parser::new(scanner);
+                let interpreter: Interpreter = Interpreter::new();
+
+                match parser.parse() {
+                    Ok(expr) => match interpreter.evaluate(&expr) {
+                        Ok(value) => {
+                            println!("{}", value);
+                        }
+                        Err(e) => {
+                            eprintln!("{}", e);
+                            std::process::exit(65);
+                        }
+                    },
                     Err(e) => {
                         eprintln!("{}", e);
                         std::process::exit(65);

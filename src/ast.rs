@@ -67,7 +67,7 @@ impl Ast {
 
             Expr::Grouping(expr) => format!("(group {})", self.print(expr)),
 
-            _ => todo!(),
+            Expr::Variable(_token) => todo!(),
         }
     }
 }

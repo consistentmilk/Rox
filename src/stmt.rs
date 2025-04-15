@@ -1,9 +1,7 @@
-use crate::{expr::Expr, token::Token};
+use crate::expr::Expr;
 
 #[derive(Debug)]
 pub enum Stmt<'a> {
-    Expression(Expr<'a>),
-    Print(Expr<'a>),
-    Var(Token<'a>, Option<Expr<'a>>),
-    Block(Vec<Stmt<'a>>),
+    Expression(Expr<'a>), // e.g., 2 + 3;
+    Print(Expr<'a>),      // e.g., print "hello";
 }
