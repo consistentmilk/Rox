@@ -36,6 +36,10 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_statement(&mut self) -> Result<Stmt<'a>, String> {
+        if self.match_tokens(&[TokenType::WHILE])? {
+            return self.while_statement();
+        }
+
         if self.match_tokens(&[TokenType::IF])? {
             return self.if_statement();
         }
@@ -57,6 +61,28 @@ impl<'a> Parser<'a> {
         }
 
         self.expression_statement()
+    }
+
+    fn while_statement(&mut self) -> Result<Stmt<'a>, String> {
+        if !self.match_tokens(&[TokenType::LEFT_PAREN])? {
+            return Err(format!(
+                "Expected '(' after 'while' on line {}",
+                self.peek()?.line
+            ));
+        }
+
+        let condition: Expr<'a> = self.expression()?;
+
+        if !self.match_tokens(&[TokenType::RIGHT_PAREN])? {
+            return Err(format!(
+                "Expected ')' after while condition on line {}",
+                self.peek()?.line
+            ));
+        }
+
+        let body: Stmt<'a> = self.parse_statement()?;
+
+        Ok(Stmt::While(condition, Box::new(body)))
     }
 
     fn if_statement(&mut self) -> Result<Stmt<'a>, String> {

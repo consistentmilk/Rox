@@ -9,4 +9,5 @@ pub enum Stmt<'a> {
     Assign(Token<'a>, Expr<'a>),
     Block(Vec<Stmt<'a>>),
     If(Expr<'a>, Box<Stmt<'a>>, Option<Box<Stmt<'a>>>),
+    While(Expr<'a>, Box<Stmt<'a>>),
 }
