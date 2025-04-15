@@ -34,17 +34,19 @@ impl Interpreter {
             }
 
             Stmt::Var(name, initializer) => {
-                let value = if let Some(expr) = initializer {
+                let value: Value = if let Some(expr) = initializer {
                     self.evaluate(expr)?
                 } else {
                     Value::Nil
                 };
+
                 self.environment.borrow_mut().define(name.lexeme, value);
+
                 Ok(())
             }
 
             Stmt::Assign(name, expr) => {
-                let value = self.evaluate(expr)?;
+                let value: Value = self.evaluate(expr)?;
 
                 self.environment
                     .borrow_mut()
@@ -127,7 +129,7 @@ impl Interpreter {
     }
 
     fn evaluate_unary(&mut self, op: &Token, expr: &Expr) -> Result<Value, String> {
-        let value = self.evaluate(expr)?;
+        let value: Value = self.evaluate(expr)?;
 
         match op.token_type {
             TokenType::MINUS => match value {
@@ -143,75 +145,99 @@ impl Interpreter {
     }
 
     fn evaluate_binary(&mut self, left: &Expr, op: &Token, right: &Expr) -> Result<Value, String> {
-        let left_val = self.evaluate(left)?;
-        let right_val = self.evaluate(right)?;
-
         match op.token_type {
-            TokenType::PLUS => match (left_val, right_val) {
-                (Value::Number(a), Value::Number(b)) => Ok(Value::Number(a + b)),
+            TokenType::OR => {
+                let left_val: Value = self.evaluate(left)?;
 
-                (Value::String(a), Value::String(b)) => Ok(Value::String(a + &b)),
-
-                _ => Err(format!(
-                    "Operands must be two numbers or two strings on line {}",
-                    op.line
-                )),
-            },
-
-            TokenType::MINUS => match (left_val, right_val) {
-                (Value::Number(a), Value::Number(b)) => Ok(Value::Number(a - b)),
-                _ => Err(format!("Operands must be numbers on line {}", op.line)),
-            },
-
-            TokenType::STAR => match (left_val, right_val) {
-                (Value::Number(a), Value::Number(b)) => Ok(Value::Number(a * b)),
-                _ => Err(format!("Operands must be numbers on line {}", op.line)),
-            },
-
-            TokenType::SLASH => match (left_val, right_val) {
-                (Value::Number(a), Value::Number(b)) => {
-                    if b == 0.0 {
-                        Err(format!("Division by zero on line {}", op.line))
-                    } else {
-                        Ok(Value::Number(a / b))
-                    }
+                if is_truthy(&left_val) {
+                    Ok(left_val)
+                } else {
+                    self.evaluate(right)
                 }
+            }
 
-                _ => Err(format!("Operands must be numbers on line {}", op.line)),
-            },
+            TokenType::AND => {
+                let left_val: Value = self.evaluate(left)?;
 
-            TokenType::EQUAL_EQUAL => Ok(Value::Bool(is_equal(&left_val, &right_val))),
+                if !is_truthy(&left_val) {
+                    Ok(left_val)
+                } else {
+                    self.evaluate(right)
+                }
+            }
+            _ => {
+                let left_val: Value = self.evaluate(left)?;
+                let right_val: Value = self.evaluate(right)?;
 
-            TokenType::BANG_EQUAL => Ok(Value::Bool(!is_equal(&left_val, &right_val))),
+                match op.token_type {
+                    TokenType::PLUS => match (left_val, right_val) {
+                        (Value::Number(a), Value::Number(b)) => Ok(Value::Number(a + b)),
 
-            TokenType::LESS => match (left_val, right_val) {
-                (Value::Number(a), Value::Number(b)) => Ok(Value::Bool(a < b)),
+                        (Value::String(a), Value::String(b)) => Ok(Value::String(a + &b)),
 
-                _ => Err(format!("Operands must be numbers on line {}", op.line)),
-            },
+                        _ => Err(format!(
+                            "Operands must be two numbers or two strings on line {}",
+                            op.line
+                        )),
+                    },
 
-            TokenType::LESS_EQUAL => match (left_val, right_val) {
-                (Value::Number(a), Value::Number(b)) => Ok(Value::Bool(a <= b)),
+                    TokenType::MINUS => match (left_val, right_val) {
+                        (Value::Number(a), Value::Number(b)) => Ok(Value::Number(a - b)),
 
-                _ => Err(format!("Operands must be numbers on line {}", op.line)),
-            },
+                        _ => Err(format!("Operands must be numbers on line {}", op.line)),
+                    },
 
-            TokenType::GREATER => match (left_val, right_val) {
-                (Value::Number(a), Value::Number(b)) => Ok(Value::Bool(a > b)),
+                    TokenType::STAR => match (left_val, right_val) {
+                        (Value::Number(a), Value::Number(b)) => Ok(Value::Number(a * b)),
 
-                _ => Err(format!("Operands must be numbers on line {}", op.line)),
-            },
+                        _ => Err(format!("Operands must be numbers on line {}", op.line)),
+                    },
 
-            TokenType::GREATER_EQUAL => match (left_val, right_val) {
-                (Value::Number(a), Value::Number(b)) => Ok(Value::Bool(a >= b)),
+                    TokenType::SLASH => match (left_val, right_val) {
+                        (Value::Number(a), Value::Number(b)) => {
+                            if b == 0.0 {
+                                Err(format!("Division by zero on line {}", op.line))
+                            } else {
+                                Ok(Value::Number(a / b))
+                            }
+                        }
 
-                _ => Err(format!("Operands must be numbers on line {}", op.line)),
-            },
+                        _ => Err(format!("Operands must be numbers on line {}", op.line)),
+                    },
 
-            _ => Err(format!("Invalid binary operator on line {}", op.line)),
+                    TokenType::EQUAL_EQUAL => Ok(Value::Bool(is_equal(&left_val, &right_val))),
+
+                    TokenType::BANG_EQUAL => Ok(Value::Bool(!is_equal(&left_val, &right_val))),
+
+                    TokenType::LESS => match (left_val, right_val) {
+                        (Value::Number(a), Value::Number(b)) => Ok(Value::Bool(a < b)),
+
+                        _ => Err(format!("Operands must be numbers on line {}", op.line)),
+                    },
+
+                    TokenType::LESS_EQUAL => match (left_val, right_val) {
+                        (Value::Number(a), Value::Number(b)) => Ok(Value::Bool(a <= b)),
+
+                        _ => Err(format!("Operands must be numbers on line {}", op.line)),
+                    },
+
+                    TokenType::GREATER => match (left_val, right_val) {
+                        (Value::Number(a), Value::Number(b)) => Ok(Value::Bool(a > b)),
+
+                        _ => Err(format!("Operands must be numbers on line {}", op.line)),
+                    },
+
+                    TokenType::GREATER_EQUAL => match (left_val, right_val) {
+                        (Value::Number(a), Value::Number(b)) => Ok(Value::Bool(a >= b)),
+
+                        _ => Err(format!("Operands must be numbers on line {}", op.line)),
+                    },
+
+                    _ => Err(format!("Invalid binary operator on line {}", op.line)),
+                }
+            }
         }
     }
-
     fn evaluate_variable(&self, token: &Token) -> Result<Value, String> {
         self.environment.borrow().get(token.lexeme, token.line)
     }

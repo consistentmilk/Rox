@@ -86,6 +86,7 @@ impl<'a> Parser<'a> {
 
         Ok(Stmt::If(condition, Box::new(then_branch), else_branch))
     }
+
     fn block(&mut self) -> Result<Stmt<'a>, String> {
         let mut statements = Vec::new();
 
@@ -160,7 +161,7 @@ impl<'a> Parser<'a> {
         let name: Token<'a> = self.previous().clone();
 
         // Optional initializer
-        let initializer = if self.match_tokens(&[TokenType::EQUAL])? {
+        let initializer: Option<Expr<'a>> = if self.match_tokens(&[TokenType::EQUAL])? {
             Some(self.expression()?)
         } else {
             None
@@ -182,7 +183,7 @@ impl<'a> Parser<'a> {
     }
 
     fn assignment(&mut self) -> Result<Expr<'a>, String> {
-        let expr: Expr<'a> = self.equality()?;
+        let expr: Expr<'a> = self.logic_or()?;
 
         if self.match_tokens(&[TokenType::EQUAL])? {
             let equals: Token<'a> = self.previous().clone();
@@ -204,6 +205,32 @@ impl<'a> Parser<'a> {
         while self.match_tokens(&[TokenType::BANG_EQUAL, TokenType::EQUAL_EQUAL])? {
             let operator: Token<'a> = self.previous().clone();
             let right: Expr<'a> = self.comparison()?;
+
+            expr = Expr::Binary(Box::new(expr), operator, Box::new(right));
+        }
+
+        Ok(expr)
+    }
+
+    fn logic_or(&mut self) -> Result<Expr<'a>, String> {
+        let mut expr: Expr<'a> = self.logic_and()?;
+
+        while self.match_tokens(&[TokenType::OR])? {
+            let operator: Token<'a> = self.previous().clone();
+            let right: Expr<'a> = self.logic_and()?;
+
+            expr = Expr::Binary(Box::new(expr), operator, Box::new(right));
+        }
+
+        Ok(expr)
+    }
+
+    fn logic_and(&mut self) -> Result<Expr<'a>, String> {
+        let mut expr: Expr<'a> = self.equality()?;
+
+        while self.match_tokens(&[TokenType::AND])? {
+            let operator: Token<'a> = self.previous().clone();
+            let right: Expr<'a> = self.equality()?;
 
             expr = Expr::Binary(Box::new(expr), operator, Box::new(right));
         }
