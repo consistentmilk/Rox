@@ -190,7 +190,11 @@ impl<'a> Parser<'a> {
         let value: Expr<'a> = self.expression()?;
 
         if !self.match_tokens(&[TokenType::SEMICOLON])? {
-            return Err(self.error_at_current("Expected ';' after print statement"));
+            return Err(if self.is_at_end()? {
+                self.error_at_previous("Expected ';' after print statement")
+            } else {
+                self.error_at_current("Expected ';' after print statement")
+            });
         }
 
         Ok(Stmt::Print(value))
@@ -351,8 +355,15 @@ impl<'a> Parser<'a> {
         ])? {
             return Ok(Expr::Literal(self.previous().clone()));
         }
+
         if self.match_tokens(&[TokenType::IDENTIFIER])? {
-            return Ok(Expr::Variable(self.previous().clone()));
+            let identifier: Token<'a> = self.previous().clone();
+
+            if self.check(&TokenType::LEFT_PAREN)? {
+                return self.parse_call(Expr::Variable(identifier));
+            }
+
+            return Ok(Expr::Variable(identifier));
         }
 
         if self.match_tokens(&[TokenType::LEFT_PAREN])? {
@@ -366,6 +377,36 @@ impl<'a> Parser<'a> {
         }
 
         Err(self.error_at_current("Expected expression"))
+    }
+
+    fn parse_call(&mut self, callee: Expr<'a>) -> Result<Expr<'a>, String> {
+        if !self.match_tokens(&[TokenType::LEFT_PAREN])? {
+            return Err(self.error_at_current("Expected '(' for function call"));
+        }
+
+        let mut arguments: Vec<Expr<'a>> = Vec::new();
+
+        if !self.check(&TokenType::RIGHT_PAREN)? {
+            loop {
+                if arguments.len() >= 255 {
+                    return Err(self.error_at_current("Cannot have more than 255 arguments"));
+                }
+
+                arguments.push(self.expression()?);
+
+                if !self.match_tokens(&[TokenType::COMMA])? {
+                    break;
+                }
+            }
+        }
+
+        let paren: Token<'a> = if !self.match_tokens(&[TokenType::RIGHT_PAREN])? {
+            return Err(self.error_at_current("Expected ')' after arguments"));
+        } else {
+            self.previous().clone()
+        };
+
+        Ok(Expr::Call(Box::new(callee), paren, arguments))
     }
 
     fn match_tokens(&mut self, types: &[TokenType]) -> Result<bool, String> {
@@ -385,7 +426,15 @@ impl<'a> Parser<'a> {
             return Ok(false);
         }
 
-        Ok(&self.peek()?.token_type == token_type)
+        let peeked: &TokenType = &self.peek()?.token_type;
+
+        match (peeked, token_type) {
+            (TokenType::NUMBER(_), TokenType::NUMBER(_)) => Ok(true),
+
+            (TokenType::STRING(_), TokenType::STRING(_)) => Ok(true),
+
+            _ => Ok(peeked == token_type),
+        }
     }
 
     fn check_next(&mut self, token_type: &TokenType) -> Result<bool, String> {

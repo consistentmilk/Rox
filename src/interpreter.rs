@@ -5,6 +5,7 @@ use crate::token::{Token, TokenType};
 use crate::value::Value;
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 pub struct Interpreter {
     environment: Rc<RefCell<Environment>>,
@@ -12,9 +13,17 @@ pub struct Interpreter {
 
 impl Interpreter {
     pub fn new() -> Self {
-        Interpreter {
-            environment: Rc::new(RefCell::new(Environment::new())),
-        }
+        let environment = Rc::new(RefCell::new(Environment::new()));
+        environment.borrow_mut().define(
+            "clock",
+            Value::NativeFunction {
+                name: "clock".to_string(),
+                arity: 0,
+                func: clock_native,
+            },
+        );
+
+        Interpreter { environment }
     }
 
     pub fn execute(&mut self, stmt: &Stmt) -> Result<(), String> {
@@ -147,6 +156,33 @@ impl Interpreter {
                     .assign(name.lexeme, value.clone(), name.line)?;
 
                 Ok(value)
+            }
+
+            Expr::Call(callee, paren, arguments) => {
+                let callee_val = self.evaluate(callee)?;
+                let mut arg_values = Vec::new();
+
+                for arg in arguments {
+                    arg_values.push(self.evaluate(arg)?);
+                }
+
+                match callee_val {
+                    #[allow(unused)]
+                    Value::NativeFunction { name, arity, func } => {
+                        if arguments.len() != arity {
+                            return Err(format!(
+                                "Expected {} arguments but got {} at line {}",
+                                arity,
+                                arguments.len(),
+                                paren.line
+                            ));
+                        }
+
+                        func(&arg_values)
+                    }
+
+                    _ => Err(format!("Can only call functions at line {}", paren.line)),
+                }
             }
         }
     }
@@ -304,4 +340,13 @@ fn is_equal(left: &Value, right: &Value) -> bool {
 
         _ => false,
     }
+}
+
+fn clock_native(_args: &[Value]) -> Result<Value, String> {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|e| format!("Clock error: {}", e))?
+        .as_secs_f64();
+
+    Ok(Value::Number(timestamp))
 }

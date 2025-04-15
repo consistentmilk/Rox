@@ -70,6 +70,8 @@ impl Ast {
             Expr::Variable(token) => token.lexeme.to_string(),
 
             Expr::Assign(_name, _expr) => todo!(),
+
+            Expr::Call(_a, _b, _c) => todo!(),
         }
     }
 }
