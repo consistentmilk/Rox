@@ -28,11 +28,11 @@ enum Commands {
     /// Parses the provided input from a given valid filepath (single expression)
     Parse { filename: Option<PathBuf> },
 
-    /// Parses the provided input as statements
-    ParseStmts { filename: Option<PathBuf> },
-
-    /// Evaluates the provided input from a Taxes given valid filepath
+    /// Evaluates the provided input from a given valid filepath
     Evaluate { filename: Option<PathBuf> },
+
+    /// Runs the provided input as a program
+    Run { filename: Option<PathBuf> },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -95,46 +95,6 @@ fn main() -> anyhow::Result<()> {
             }
         },
 
-        Commands::ParseStmts { filename } => match filename {
-            Some(filename) => {
-                let mut buf: Vec<u8> = Vec::new();
-                let mut reader: BufReader<File> = BufReader::new(File::open(filename)?);
-                let _ = reader.read_to_end(&mut buf);
-
-                let scanner: Scanner = Scanner::new(&buf);
-                let mut parser: Parser = Parser::new(scanner);
-                let printer: Ast = Ast;
-                let mut parsed: bool = true;
-
-                for stmt in &mut parser {
-                    match stmt {
-                        Ok(stmt) => match stmt {
-                            lox::stmt::Stmt::Expression(expr) => {
-                                println!("expr: {}", printer.print(&expr))
-                            }
-                            lox::stmt::Stmt::Print(expr) => {
-                                println!("print: {}", printer.print(&expr))
-                            }
-                        },
-
-                        Err(e) => {
-                            parsed = false;
-                            eprintln!("{}", e);
-                        }
-                    }
-                }
-
-                if !parsed {
-                    std::process::exit(65);
-                }
-            }
-
-            None => {
-                println!("No input filepath was provided. Exiting...");
-                std::process::exit(0);
-            }
-        },
-
         Commands::Evaluate { filename } => match filename {
             Some(filename) => {
                 let mut buf: Vec<u8> = Vec::new();
@@ -160,6 +120,41 @@ fn main() -> anyhow::Result<()> {
                     Err(e) => {
                         eprintln!("{}", e);
                         std::process::exit(65);
+                    }
+                }
+            }
+
+            None => {
+                println!("No input filepath was provided. Exiting...");
+                std::process::exit(0);
+            }
+        },
+
+        Commands::Run { filename } => match filename {
+            Some(filename) => {
+                let mut buf: Vec<u8> = Vec::new();
+                let mut reader: BufReader<File> = BufReader::new(File::open(filename)?);
+                let _ = reader.read_to_end(&mut buf);
+
+                let scanner: Scanner = Scanner::new(&buf);
+                let mut parser: Parser = Parser::new(scanner);
+                let interpreter: Interpreter = Interpreter::new();
+
+                for stmt in &mut parser {
+                    match stmt {
+                        Ok(stmt) => match interpreter.execute(&stmt) {
+                            Ok(()) => {}
+
+                            Err(e) => {
+                                eprintln!("{}", e);
+                                std::process::exit(70); // Runtime error
+                            }
+                        },
+
+                        Err(e) => {
+                            eprintln!("{}", e);
+                            std::process::exit(65); // Syntax error
+                        }
                     }
                 }
             }

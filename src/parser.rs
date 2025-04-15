@@ -225,33 +225,6 @@ impl<'a> Parser<'a> {
     fn previous(&self) -> &Token<'a> {
         self.previous.as_ref().expect("No previous token")
     }
-
-    fn synchronize(&mut self) -> Result<(), String> {
-        while !self.is_at_end()? {
-            match self.peek()?.token_type {
-                TokenType::SEMICOLON => {
-                    self.advance()?;
-                    return Ok(());
-                }
-
-                TokenType::CLASS
-                | TokenType::FUN
-                | TokenType::VAR
-                | TokenType::FOR
-                | TokenType::IF
-                | TokenType::WHILE
-                | TokenType::PRINT
-                | TokenType::RETURN => {
-                    return Ok(());
-                }
-
-                _ => {
-                    self.advance()?;
-                }
-            }
-        }
-        Ok(())
-    }
 }
 
 impl<'a> Iterator for Parser<'a> {
@@ -268,14 +241,7 @@ impl<'a> Iterator for Parser<'a> {
         // Try to parse a statement
         match self.parse_statement() {
             Ok(stmt) => Some(Ok(stmt)),
-
-            Err(_) => {
-                // Synchronize to the next statement
-                match self.synchronize() {
-                    Ok(()) => self.next(), // Try parsing again
-                    Err(sync_err) => Some(Err(sync_err)),
-                }
-            }
+            Err(e) => Some(Err(e)), // Yield the error directly
         }
     }
 }
