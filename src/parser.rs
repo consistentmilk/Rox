@@ -4,19 +4,6 @@ use crate::stmt::Stmt;
 use crate::token::{Token, TokenType};
 use std::iter::Peekable;
 
-///
-/// Parser struct directly leverages the Iterator API
-/// exposed by the Scanner struct that tokenizes the
-/// provided input.
-///
-/// The Iterator API allows us to consume tokens one by one,
-/// and directly parse them into valid expressions. This keeps
-/// memory usage low by reducing cloning and copying
-///
-/// Another important aspect is that the Iterator API allows
-/// us to make the Scanner struct Peekable, which is ncessary
-/// to parse more complex expressions.
-///
 pub struct Parser<'a> {
     tokens: Peekable<Scanner<'a>>,
     previous: Option<Token<'a>>,
@@ -30,7 +17,6 @@ impl<'a> Parser<'a> {
         }
     }
 
-    // For compatibility with existing parse command (e.g., Codecrafters tests)
     pub fn parse(&mut self) -> Result<Expr<'a>, String> {
         self.expression()
     }
@@ -69,61 +55,76 @@ impl<'a> Parser<'a> {
 
     fn for_statement(&mut self) -> Result<Stmt<'a>, String> {
         if !self.match_tokens(&[TokenType::LEFT_PAREN])? {
-            return Err(format!(
-                "Expected '(' after 'for' on line {}",
-                self.peek()?.line
-            ));
+            return Err(self.error_at_current("Expected '(' after 'for'"));
         }
 
         // Initializer
-        let initializer = if self.match_tokens(&[TokenType::SEMICOLON])? {
+        let initializer: Option<Box<Stmt<'a>>> = if self.match_tokens(&[TokenType::SEMICOLON])? {
             None
         } else if self.match_tokens(&[TokenType::VAR])? {
             Some(Box::new(self.parse_var_statement()?))
         } else {
-            Some(Box::new(self.expression_statement()?))
+            let expr_stmt: Stmt<'a> = match self.expression_statement() {
+                Ok(stmt) => stmt,
+
+                Err(e) => return Err(e),
+            };
+
+            if matches!(expr_stmt, Stmt::Expression(_)) {
+                Some(Box::new(expr_stmt))
+            } else {
+                return Err(self.error_at_previous("Expected expression in for initializer"));
+            }
         };
 
         // Condition
-        let condition = if !self.check(&TokenType::SEMICOLON)? {
-            Some(self.expression()?)
+        let condition: Option<Expr<'a>> = if !self.check(&TokenType::SEMICOLON)? {
+            let cond: Expr<'a> = self.expression()?;
+
+            if !self.match_tokens(&[TokenType::SEMICOLON])? {
+                return Err(self.error_at_current("Expected ';' after loop condition"));
+            }
+
+            Some(cond)
         } else {
+            self.match_tokens(&[TokenType::SEMICOLON])?;
+
             None
         };
-        self.match_tokens(&[TokenType::SEMICOLON])?;
 
         // Increment
-        let increment = if !self.check(&TokenType::RIGHT_PAREN)? {
+        let increment: Option<Expr<'a>> = if !self.check(&TokenType::RIGHT_PAREN)? {
             Some(self.expression()?)
         } else {
             None
         };
+
         if !self.match_tokens(&[TokenType::RIGHT_PAREN])? {
-            return Err(format!(
-                "Expected ')' after for clauses on line {}",
-                self.peek()?.line
-            ));
+            return Err(self.error_at_current("Expected ')' after for clauses"));
         }
 
-        let body = self.parse_statement()?;
+        // Body
+        let body: Stmt<'a> = match self.parse_statement() {
+            Ok(stmt) => stmt,
+
+            Err(e) => return Err(e),
+        };
+        if matches!(body, Stmt::Var(_, _)) {
+            return Err(self.error_at_previous("Expected expression"));
+        }
+
         Ok(Stmt::For(initializer, condition, increment, Box::new(body)))
     }
 
     fn while_statement(&mut self) -> Result<Stmt<'a>, String> {
         if !self.match_tokens(&[TokenType::LEFT_PAREN])? {
-            return Err(format!(
-                "Expected '(' after 'while' on line {}",
-                self.peek()?.line
-            ));
+            return Err(self.error_at_current("Expected '(' after 'while'"));
         }
 
         let condition: Expr<'a> = self.expression()?;
 
         if !self.match_tokens(&[TokenType::RIGHT_PAREN])? {
-            return Err(format!(
-                "Expected ')' after while condition on line {}",
-                self.peek()?.line
-            ));
+            return Err(self.error_at_current("Expected ')' after while condition"));
         }
 
         let body: Stmt<'a> = self.parse_statement()?;
@@ -133,25 +134,21 @@ impl<'a> Parser<'a> {
 
     fn if_statement(&mut self) -> Result<Stmt<'a>, String> {
         if !self.match_tokens(&[TokenType::LEFT_PAREN])? {
-            return Err(format!(
-                "Expected '(' after 'if' on line {}",
-                self.peek()?.line
-            ));
+            return Err(self.error_at_current("Expected '(' after 'if'"));
         }
 
         let condition: Expr<'a> = self.expression()?;
 
         if !self.match_tokens(&[TokenType::RIGHT_PAREN])? {
-            return Err(format!(
-                "Expected ')' after if condition on line {}",
-                self.peek()?.line
-            ));
+            return Err(self.error_at_current("Expected ')' after if condition"));
         }
 
         let then_branch: Stmt<'a> = self.parse_statement()?;
 
         let else_branch: Option<Box<Stmt<'a>>> = if self.match_tokens(&[TokenType::ELSE])? {
-            Some(Box::new(self.parse_statement()?))
+            let else_stmt: Stmt<'a> = self.parse_statement()?;
+
+            Some(Box::new(else_stmt))
         } else {
             None
         };
@@ -160,91 +157,70 @@ impl<'a> Parser<'a> {
     }
 
     fn block(&mut self) -> Result<Stmt<'a>, String> {
-        let mut statements = Vec::new();
+        let mut statements: Vec<Stmt<'a>> = Vec::new();
 
         while !self.check(&TokenType::RIGHT_BRACE)? && !self.is_at_end()? {
             statements.push(self.parse_statement()?);
         }
 
         if !self.match_tokens(&[TokenType::RIGHT_BRACE])? {
-            return Err(format!(
-                "[line {}] Error at end: Expect '}}'",
-                self.peek()?.line
-            ));
+            return Err(self.error_at_current("Expected '}' after block"));
         }
 
         Ok(Stmt::Block(statements))
+    }
+
+    fn assign_statement(&mut self) -> Result<Stmt<'a>, String> {
+        self.match_tokens(&[TokenType::IDENTIFIER])?;
+
+        let name: Token<'a> = self.previous().clone();
+
+        self.match_tokens(&[TokenType::EQUAL])?;
+
+        let value: Expr<'a> = self.expression()?;
+
+        if !self.match_tokens(&[TokenType::SEMICOLON])? {
+            return Err(self.error_at_current("Expected ';' after assignment"));
+        }
+
+        Ok(Stmt::Assign(name, value))
     }
 
     fn print_statement(&mut self) -> Result<Stmt<'a>, String> {
         let value: Expr<'a> = self.expression()?;
 
         if !self.match_tokens(&[TokenType::SEMICOLON])? {
-            return Err(format!(
-                "Expected ';' after print statement on line {}",
-                self.peek()?.line
-            ));
+            return Err(self.error_at_current("Expected ';' after print statement"));
         }
 
         Ok(Stmt::Print(value))
-    }
-
-    fn assign_statement(&mut self) -> Result<Stmt<'a>, String> {
-        // Consume IDENTIFIER
-        self.match_tokens(&[TokenType::IDENTIFIER])?;
-        let name: Token<'a> = self.previous().clone();
-
-        // Consume =
-        self.match_tokens(&[TokenType::EQUAL])?;
-        let value: Expr<'a> = self.expression()?;
-
-        if !self.match_tokens(&[TokenType::SEMICOLON])? {
-            return Err(format!(
-                "Expected ';' after assignment on line {}",
-                self.peek()?.line
-            ));
-        }
-
-        Ok(Stmt::Assign(name, value))
     }
 
     fn expression_statement(&mut self) -> Result<Stmt<'a>, String> {
         let expr: Expr<'a> = self.expression()?;
 
         if !self.match_tokens(&[TokenType::SEMICOLON])? {
-            return Err(format!(
-                "Expected ';' after expression on line {}",
-                self.peek()?.line
-            ));
+            return Err(self.error_at_current("Expected ';' after expression"));
         }
 
         Ok(Stmt::Expression(expr))
     }
 
     fn parse_var_statement(&mut self) -> Result<Stmt<'a>, String> {
-        // Expect an identifier
         if !self.match_tokens(&[TokenType::IDENTIFIER])? {
-            return Err(format!(
-                "Expected variable name on line {}",
-                self.peek()?.line
-            ));
+            return Err(self.error_at_current("Expected variable name"));
         }
 
         let name: Token<'a> = self.previous().clone();
 
-        // Optional initializer
         let initializer: Option<Expr<'a>> = if self.match_tokens(&[TokenType::EQUAL])? {
             Some(self.expression()?)
         } else {
             None
         };
 
-        // Expect semicolon
         if !self.match_tokens(&[TokenType::SEMICOLON])? {
-            return Err(format!(
-                "Expected ';' after variable declaration on line {}",
-                self.peek()?.line
-            ));
+            return Err(self.error_at_current("Expected ';' after variable declaration"));
         }
 
         Ok(Stmt::Var(name, initializer))
@@ -259,26 +235,13 @@ impl<'a> Parser<'a> {
 
         if self.match_tokens(&[TokenType::EQUAL])? {
             let equals: Token<'a> = self.previous().clone();
-            let value: Expr<'a> = self.assignment()?; // Right-associative
+            let value: Expr<'a> = self.assignment()?;
 
             if let Expr::Variable(name) = expr {
                 return Ok(Expr::Assign(name, Box::new(value)));
             }
 
-            return Err(format!("Invalid assignment target on line {}", equals.line));
-        }
-
-        Ok(expr)
-    }
-
-    fn equality(&mut self) -> Result<Expr<'a>, String> {
-        let mut expr: Expr<'a> = self.comparison()?;
-
-        while self.match_tokens(&[TokenType::BANG_EQUAL, TokenType::EQUAL_EQUAL])? {
-            let operator: Token<'a> = self.previous().clone();
-            let right: Expr<'a> = self.comparison()?;
-
-            expr = Expr::Binary(Box::new(expr), operator, Box::new(right));
+            return Err(self.error_at_token(&equals, "Invalid assignment target"));
         }
 
         Ok(expr)
@@ -303,6 +266,19 @@ impl<'a> Parser<'a> {
         while self.match_tokens(&[TokenType::AND])? {
             let operator: Token<'a> = self.previous().clone();
             let right: Expr<'a> = self.equality()?;
+
+            expr = Expr::Binary(Box::new(expr), operator, Box::new(right));
+        }
+
+        Ok(expr)
+    }
+
+    fn equality(&mut self) -> Result<Expr<'a>, String> {
+        let mut expr: Expr<'a> = self.comparison()?;
+
+        while self.match_tokens(&[TokenType::BANG_EQUAL, TokenType::EQUAL_EQUAL])? {
+            let operator: Token<'a> = self.previous().clone();
+            let right: Expr<'a> = self.comparison()?;
 
             expr = Expr::Binary(Box::new(expr), operator, Box::new(right));
         }
@@ -375,7 +351,6 @@ impl<'a> Parser<'a> {
         ])? {
             return Ok(Expr::Literal(self.previous().clone()));
         }
-
         if self.match_tokens(&[TokenType::IDENTIFIER])? {
             return Ok(Expr::Variable(self.previous().clone()));
         }
@@ -384,23 +359,15 @@ impl<'a> Parser<'a> {
             let expr: Expr<'a> = self.expression()?;
 
             if !self.match_tokens(&[TokenType::RIGHT_PAREN])? {
-                return Err(format!(
-                    "Expected ')' after expression on line {}",
-                    self.peek()?.line
-                ));
+                return Err(self.error_at_current("Expected ')' after expression"));
             }
 
             return Ok(Expr::Grouping(Box::new(expr)));
         }
 
-        Err(format!("Expected expression on line {}", self.peek()?.line))
+        Err(self.error_at_current("Expected expression"))
     }
 
-    ///
-    /// Matches the current tokens type to a provided token type
-    ///
-    /// Advances the iterator to the next token
-    ///
     fn match_tokens(&mut self, types: &[TokenType]) -> Result<bool, String> {
         for token_type in types {
             if self.check(token_type)? {
@@ -413,7 +380,6 @@ impl<'a> Parser<'a> {
         Ok(false)
     }
 
-    /// Helper method for match_tokens()
     fn check(&mut self, token_type: &TokenType) -> Result<bool, String> {
         if self.is_at_end()? {
             return Ok(false);
@@ -423,24 +389,16 @@ impl<'a> Parser<'a> {
     }
 
     fn check_next(&mut self, token_type: &TokenType) -> Result<bool, String> {
-        let mut tokens = self.tokens.clone();
+        let mut tokens: Peekable<Scanner<'a>> = self.tokens.clone();
 
-        tokens.next(); // Skip current token
+        tokens.next();
 
         match tokens.peek() {
             Some(Ok(token)) => Ok(&token.token_type == token_type),
-
             _ => Ok(false),
         }
     }
 
-    ///
-    /// Consumes the current token from the Scanner and
-    /// stores it in self.previous
-    ///
-    /// Implicitly moves the Scanner to scan for the next
-    /// token
-    ///
     fn advance(&mut self) -> Result<&Token<'a>, String> {
         self.previous = self.tokens.next().transpose()?;
 
@@ -461,8 +419,36 @@ impl<'a> Parser<'a> {
             .map_err(|e: &String| e.clone())
     }
 
-    fn previous(&self) -> &Token<'a> {
+    fn previous(&mut self) -> &Token<'a> {
         self.previous.as_ref().expect("No previous token")
+    }
+
+    fn error_at_current(&mut self, message: &str) -> String {
+        match self.peek() {
+            Ok(token) => {
+                let token: Token<'a> = token.clone();
+
+                self.error_at_token(&token, message)
+            }
+
+            Err(_) => format!("[line unknown] Error: {}", message),
+        }
+    }
+
+    fn error_at_previous(&mut self, message: &str) -> String {
+        let previous: Token<'a> = self.previous().clone();
+
+        self.error_at_token(&previous, message)
+    }
+
+    fn error_at_token(&self, token: &Token, message: &str) -> String {
+        let lexeme: &str = if token.token_type == TokenType::EOF {
+            "end"
+        } else {
+            token.lexeme
+        };
+
+        format!("[line {}] Error at '{}': {}", token.line, lexeme, message)
     }
 }
 
@@ -470,18 +456,14 @@ impl<'a> Iterator for Parser<'a> {
     type Item = Result<Stmt<'a>, String>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        // Check if we're at EOF
         match self.peek() {
-            Ok(token) if token.token_type == TokenType::EOF => return None,
+            Ok(token) if token.token_type == TokenType::EOF => None,
 
-            Ok(_) => {}
+            Ok(_) => match self.parse_statement() {
+                Ok(stmt) => Some(Ok(stmt)),
 
-            Err(e) => return Some(Err(e)),
-        }
-
-        // Try to parse a statement
-        match self.parse_statement() {
-            Ok(stmt) => Some(Ok(stmt)),
+                Err(e) => Some(Err(e)),
+            },
 
             Err(e) => Some(Err(e)),
         }
