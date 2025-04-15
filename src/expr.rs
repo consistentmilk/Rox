@@ -16,4 +16,7 @@ pub enum Expr<'a> {
 
     // Used to parse 'var' keyword expressions
     Variable(Token<'a>),
+
+    // Used to parse assignment operators
+    Assign(Token<'a>, Box<Expr<'a>>), 
 }

@@ -6,4 +6,5 @@ pub enum Stmt<'a> {
     Expression(Expr<'a>),
     Print(Expr<'a>),
     Var(Token<'a>, Option<Expr<'a>>),
+    Assign(Token<'a>, Expr<'a>),
 }

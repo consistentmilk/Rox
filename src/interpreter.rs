@@ -15,37 +15,43 @@ impl Interpreter {
             globals: HashMap::new(),
         }
     }
+
     pub fn execute(&mut self, stmt: &Stmt) -> Result<(), String> {
         match stmt {
             Stmt::Expression(expr) => {
                 self.evaluate(expr)?;
-
                 Ok(())
             }
-
             Stmt::Print(expr) => {
                 let value = self.evaluate(expr)?;
                 println!("{}", value);
-
                 Ok(())
             }
-
             Stmt::Var(name, initializer) => {
                 let value = if let Some(expr) = initializer {
                     self.evaluate(expr)?
                 } else {
                     Value::Nil
                 };
-
-                // Clone lexeme for ownership
                 self.globals.insert(name.lexeme.to_string(), value);
-
                 Ok(())
+            }
+            Stmt::Assign(name, expr) => {
+                let value = self.evaluate(expr)?;
+                if self.globals.contains_key(name.lexeme) {
+                    self.globals.insert(name.lexeme.to_string(), value);
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "Undefined variable '{}' on line {}",
+                        name.lexeme, name.line
+                    ))
+                }
             }
         }
     }
 
-    pub fn evaluate(&self, expr: &Expr) -> Result<Value, String> {
+    pub fn evaluate(&mut self, expr: &Expr) -> Result<Value, String> {
         match expr {
             Expr::Literal(token) => self.evaluate_literal(token),
 
@@ -56,6 +62,21 @@ impl Interpreter {
             Expr::Grouping(expr) => self.evaluate(expr),
 
             Expr::Variable(token) => self.evaluate_variable(token),
+
+            Expr::Assign(name, expr) => {
+                let value = self.evaluate(expr)?;
+
+                if self.globals.contains_key(name.lexeme) {
+                    self.globals.insert(name.lexeme.to_string(), value.clone());
+
+                    Ok(value)
+                } else {
+                    Err(format!(
+                        "Undefined variable '{}' on line {}",
+                        name.lexeme, name.line
+                    ))
+                }
+            }
         }
     }
 
@@ -75,7 +96,7 @@ impl Interpreter {
         }
     }
 
-    fn evaluate_unary(&self, op: &Token, expr: &Expr) -> Result<Value, String> {
+    fn evaluate_unary(&mut self, op: &Token, expr: &Expr) -> Result<Value, String> {
         let value: Value = self.evaluate(expr)?;
 
         match op.token_type {
@@ -91,7 +112,7 @@ impl Interpreter {
         }
     }
 
-    fn evaluate_binary(&self, left: &Expr, op: &Token, right: &Expr) -> Result<Value, String> {
+    fn evaluate_binary(&mut self, left: &Expr, op: &Token, right: &Expr) -> Result<Value, String> {
         let left_val: Value = self.evaluate(left)?;
         let right_val: Value = self.evaluate(right)?;
 

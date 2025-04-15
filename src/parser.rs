@@ -35,16 +35,17 @@ impl<'a> Parser<'a> {
         self.expression()
     }
 
-    // Parse a single statement (used by Iterator)
     fn parse_statement(&mut self) -> Result<Stmt<'a>, String> {
         if self.match_tokens(&[TokenType::PRINT])? {
             return self.print_statement();
         }
-
         if self.match_tokens(&[TokenType::VAR])? {
             return self.parse_var_statement();
         }
-
+        // Check for assignment statement (IDENTIFIER = expr ;)
+        if self.check(&TokenType::IDENTIFIER)? && self.check_next(&TokenType::EQUAL)? {
+            return self.assign_statement();
+        }
         self.expression_statement()
     }
 
@@ -59,6 +60,25 @@ impl<'a> Parser<'a> {
         }
 
         Ok(Stmt::Print(value))
+    }
+
+    fn assign_statement(&mut self) -> Result<Stmt<'a>, String> {
+        // Consume IDENTIFIER
+        self.match_tokens(&[TokenType::IDENTIFIER])?;
+        let name: Token<'a> = self.previous().clone();
+
+        // Consume =
+        self.match_tokens(&[TokenType::EQUAL])?;
+        let value: Expr<'a> = self.expression()?;
+
+        if !self.match_tokens(&[TokenType::SEMICOLON])? {
+            return Err(format!(
+                "Expected ';' after assignment on line {}",
+                self.peek()?.line
+            ));
+        }
+
+        Ok(Stmt::Assign(name, value))
     }
 
     fn expression_statement(&mut self) -> Result<Stmt<'a>, String> {
@@ -104,7 +124,24 @@ impl<'a> Parser<'a> {
     }
 
     fn expression(&mut self) -> Result<Expr<'a>, String> {
-        self.equality()
+        self.assignment()
+    }
+
+    fn assignment(&mut self) -> Result<Expr<'a>, String> {
+        let expr: Expr<'a> = self.equality()?;
+
+        if self.match_tokens(&[TokenType::EQUAL])? {
+            let equals: Token<'a> = self.previous().clone();
+            let value: Expr<'a> = self.assignment()?; // Right-associative
+
+            if let Expr::Variable(name) = expr {
+                return Ok(Expr::Assign(name, Box::new(value)));
+            }
+
+            return Err(format!("Invalid assignment target on line {}", equals.line));
+        }
+
+        Ok(expr)
     }
 
     fn equality(&mut self) -> Result<Expr<'a>, String> {
@@ -230,6 +267,18 @@ impl<'a> Parser<'a> {
         }
 
         Ok(&self.peek()?.token_type == token_type)
+    }
+
+    fn check_next(&mut self, token_type: &TokenType) -> Result<bool, String> {
+        let mut tokens = self.tokens.clone();
+
+        tokens.next(); // Skip current token
+
+        match tokens.peek() {
+            Some(Ok(token)) => Ok(&token.token_type == token_type),
+
+            _ => Ok(false),
+        }
     }
 
     ///

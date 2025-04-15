@@ -51,6 +51,7 @@ fn main() -> anyhow::Result<()> {
                 while let Some(token) = scanner.next() {
                     match token {
                         Ok(token) => println!("{}", token),
+
                         Err(e) => {
                             tokenized = false;
                             eprintln!("{}", e);
@@ -77,11 +78,13 @@ fn main() -> anyhow::Result<()> {
 
                 let scanner: Scanner = Scanner::new(&buf);
                 let mut parser: Parser = Parser::new(scanner);
+
                 match parser.parse() {
                     Ok(expr) => {
                         let printer: Ast = Ast;
                         println!("{}", printer.print(&expr));
                     }
+
                     Err(e) => {
                         eprintln!("{}", e);
                         std::process::exit(65);
@@ -103,7 +106,7 @@ fn main() -> anyhow::Result<()> {
 
                 let scanner: Scanner = Scanner::new(&buf);
                 let mut parser: Parser = Parser::new(scanner);
-                let interpreter: Interpreter = Interpreter::new();
+                let mut interpreter: Interpreter = Interpreter::new();
 
                 match parser.parse() {
                     Ok(expr) => match interpreter.evaluate(&expr) {
@@ -147,13 +150,15 @@ fn main() -> anyhow::Result<()> {
 
                             Err(e) => {
                                 eprintln!("{}", e);
-                                std::process::exit(70); // Runtime error
+
+                                std::process::exit(70);
                             }
                         },
 
                         Err(e) => {
                             eprintln!("{}", e);
-                            std::process::exit(65); // Syntax error
+
+                            std::process::exit(65);
                         }
                     }
                 }
