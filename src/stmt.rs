@@ -7,4 +7,5 @@ pub enum Stmt<'a> {
     Print(Expr<'a>),
     Var(Token<'a>, Option<Expr<'a>>),
     Assign(Token<'a>, Expr<'a>),
+    Block(Vec<Stmt<'a>>),
 }

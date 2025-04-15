@@ -39,14 +39,37 @@ impl<'a> Parser<'a> {
         if self.match_tokens(&[TokenType::PRINT])? {
             return self.print_statement();
         }
+
         if self.match_tokens(&[TokenType::VAR])? {
             return self.parse_var_statement();
         }
-        // Check for assignment statement (IDENTIFIER = expr ;)
+
         if self.check(&TokenType::IDENTIFIER)? && self.check_next(&TokenType::EQUAL)? {
             return self.assign_statement();
         }
+
+        if self.match_tokens(&[TokenType::LEFT_BRACE])? {
+            return self.block();
+        }
+
         self.expression_statement()
+    }
+
+    fn block(&mut self) -> Result<Stmt<'a>, String> {
+        let mut statements = Vec::new();
+
+        while !self.check(&TokenType::RIGHT_BRACE)? && !self.is_at_end()? {
+            statements.push(self.parse_statement()?);
+        }
+
+        if !self.match_tokens(&[TokenType::RIGHT_BRACE])? {
+            return Err(format!(
+                "[line {}] Error at end: Expect '}}'",
+                self.peek()?.line
+            ));
+        }
+
+        Ok(Stmt::Block(statements))
     }
 
     fn print_statement(&mut self) -> Result<Stmt<'a>, String> {
