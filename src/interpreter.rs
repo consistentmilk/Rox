@@ -185,11 +185,9 @@ impl Interpreter {
             Expr::Call(callee, paren, arguments) => {
                 let callee_val = self.evaluate(callee)?;
                 let mut arg_values = Vec::new();
-
                 for arg in arguments {
                     arg_values.push(self.evaluate(arg)?);
                 }
-
                 match callee_val {
                     Value::NativeFunction { func, arity, .. } => {
                         if arguments.len() != arity {
@@ -202,7 +200,6 @@ impl Interpreter {
                         }
                         func(&arg_values)
                     }
-
                     Value::Function { name, arity } => {
                         if arguments.len() != arity {
                             return Err(format!(
@@ -217,14 +214,30 @@ impl Interpreter {
                             format!("Undefined function '{}' at line {}", name, paren.line)
                         })?;
 
-                        let Stmt::Function(_, _, body) = function else {
+                        let Stmt::Function(_, params, body) = function else {
                             return Err(format!("Invalid function '{}'", name));
                         };
+
+                        if params.len() != arg_values.len() {
+                            return Err(format!(
+                                "Function '{}' expected {} arguments but got {} at line {}",
+                                name,
+                                params.len(),
+                                arg_values.len(),
+                                paren.line
+                            ));
+                        }
 
                         let previous: Rc<RefCell<Environment>> = self.environment.clone();
 
                         self.environment =
                             Rc::new(RefCell::new(Environment::with_enclosing(previous.clone())));
+
+                        for (param, arg) in params.iter().zip(arg_values.iter()) {
+                            self.environment
+                                .borrow_mut()
+                                .define(&param.lexeme, arg.clone());
+                        }
 
                         let result: Result<(), String> = self.execute(&body.clone());
 

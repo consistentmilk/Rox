@@ -61,12 +61,32 @@ impl Parser {
         if !self.match_tokens(&[TokenType::IDENTIFIER])? {
             return Err(self.error_at_current("Expected function name"));
         }
-        let name = self.previous().clone();
+        let name: Token = self.previous().clone();
 
         if !self.match_tokens(&[TokenType::LEFT_PAREN])? {
             return Err(self.error_at_current("Expected '(' after function name"));
         }
-        let parameters = Vec::new();
+
+        let mut parameters: Vec<Token> = Vec::new();
+
+        if !self.check(&TokenType::RIGHT_PAREN)? {
+            loop {
+                if parameters.len() >= 8 {
+                    return Err(self.error_at_current("Cannot have more than 8 parameters"));
+                }
+
+                if !self.match_tokens(&[TokenType::IDENTIFIER])? {
+                    return Err(self.error_at_current("Expected parameter name"));
+                }
+
+                parameters.push(self.previous().clone());
+
+                if !self.match_tokens(&[TokenType::COMMA])? {
+                    break;
+                }
+            }
+        }
+
         if !self.match_tokens(&[TokenType::RIGHT_PAREN])? {
             return Err(self.error_at_current("Expected ')' after parameters"));
         }
@@ -74,7 +94,8 @@ impl Parser {
         if !self.match_tokens(&[TokenType::LEFT_BRACE])? {
             return Err(self.error_at_current("Expected '{' before function body"));
         }
-        let body = self.block()?;
+
+        let body: Stmt = self.block()?;
 
         Ok(Stmt::Function(name, parameters, Box::new(body)))
     }
