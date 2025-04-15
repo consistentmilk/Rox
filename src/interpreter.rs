@@ -93,6 +93,37 @@ impl Interpreter {
 
                 Ok(())
             }
+
+            Stmt::For(initializer, condition, increment, body) => {
+                // Create new scope for loop
+                let previous: Rc<RefCell<Environment>> = self.environment.clone();
+
+                self.environment =
+                    Rc::new(RefCell::new(Environment::with_enclosing(previous.clone())));
+
+                // Execute initializer
+                if let Some(init) = initializer {
+                    self.execute(init)?;
+                }
+
+                // Loop
+                while is_truthy(
+                    &condition
+                        .as_ref()
+                        .map_or(Ok(Value::Bool(true)), |c| self.evaluate(c))?,
+                ) {
+                    self.execute(body)?;
+
+                    if let Some(incr) = increment {
+                        self.evaluate(incr)?;
+                    }
+                }
+
+                // Restore outer scope
+                self.environment = previous;
+
+                Ok(())
+            }
         }
     }
 

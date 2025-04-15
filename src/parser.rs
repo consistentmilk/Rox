@@ -36,6 +36,10 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_statement(&mut self) -> Result<Stmt<'a>, String> {
+        if self.match_tokens(&[TokenType::FOR])? {
+            return self.for_statement();
+        }
+
         if self.match_tokens(&[TokenType::WHILE])? {
             return self.while_statement();
         }
@@ -61,6 +65,48 @@ impl<'a> Parser<'a> {
         }
 
         self.expression_statement()
+    }
+
+    fn for_statement(&mut self) -> Result<Stmt<'a>, String> {
+        if !self.match_tokens(&[TokenType::LEFT_PAREN])? {
+            return Err(format!(
+                "Expected '(' after 'for' on line {}",
+                self.peek()?.line
+            ));
+        }
+
+        // Initializer
+        let initializer = if self.match_tokens(&[TokenType::SEMICOLON])? {
+            None
+        } else if self.match_tokens(&[TokenType::VAR])? {
+            Some(Box::new(self.parse_var_statement()?))
+        } else {
+            Some(Box::new(self.expression_statement()?))
+        };
+
+        // Condition
+        let condition = if !self.check(&TokenType::SEMICOLON)? {
+            Some(self.expression()?)
+        } else {
+            None
+        };
+        self.match_tokens(&[TokenType::SEMICOLON])?;
+
+        // Increment
+        let increment = if !self.check(&TokenType::RIGHT_PAREN)? {
+            Some(self.expression()?)
+        } else {
+            None
+        };
+        if !self.match_tokens(&[TokenType::RIGHT_PAREN])? {
+            return Err(format!(
+                "Expected ')' after for clauses on line {}",
+                self.peek()?.line
+            ));
+        }
+
+        let body = self.parse_statement()?;
+        Ok(Stmt::For(initializer, condition, increment, Box::new(body)))
     }
 
     fn while_statement(&mut self) -> Result<Stmt<'a>, String> {
