@@ -1,18 +1,19 @@
-use std::collections::HashMap;
-
+use crate::environment::Environment;
 use crate::expr::Expr;
 use crate::stmt::Stmt;
 use crate::token::{Token, TokenType};
 use crate::value::Value;
+use std::cell::RefCell;
+use std::rc::Rc;
 
 pub struct Interpreter {
-    globals: HashMap<String, Value>,
+    environment: Rc<RefCell<Environment>>,
 }
 
 impl Interpreter {
     pub fn new() -> Self {
         Interpreter {
-            globals: HashMap::new(),
+            environment: Rc::new(RefCell::new(Environment::new())),
         }
     }
 
@@ -20,39 +21,55 @@ impl Interpreter {
         match stmt {
             Stmt::Expression(expr) => {
                 self.evaluate(expr)?;
+
                 Ok(())
             }
+
             Stmt::Print(expr) => {
                 let value = self.evaluate(expr)?;
+
                 println!("{}", value);
+
                 Ok(())
             }
+
             Stmt::Var(name, initializer) => {
                 let value = if let Some(expr) = initializer {
                     self.evaluate(expr)?
                 } else {
                     Value::Nil
                 };
-                self.globals.insert(name.lexeme.to_string(), value);
+                self.environment.borrow_mut().define(name.lexeme, value);
                 Ok(())
             }
+
             Stmt::Assign(name, expr) => {
                 let value = self.evaluate(expr)?;
-                if self.globals.contains_key(name.lexeme) {
-                    self.globals.insert(name.lexeme.to_string(), value);
-                    Ok(())
-                } else {
-                    Err(format!(
-                        "Undefined variable '{}' on line {}",
-                        name.lexeme, name.line
-                    ))
-                }
+
+                self.environment
+                    .borrow_mut()
+                    .assign(name.lexeme, value, name.line)?;
+
+                Ok(())
             }
 
             Stmt::Block(statements) => {
+                let previous: Rc<RefCell<Environment>> = self.environment.clone();
+
+                self.environment =
+                    Rc::new(RefCell::new(Environment::with_enclosing(previous.clone())));
+
                 for stmt in statements {
-                    self.execute(stmt)?;
+                    match self.execute(stmt) {
+                        Ok(()) => {}
+                        Err(e) => {
+                            self.environment = previous;
+                            return Err(e);
+                        }
+                    }
                 }
+
+                self.environment = previous;
 
                 Ok(())
             }
@@ -74,16 +91,11 @@ impl Interpreter {
             Expr::Assign(name, expr) => {
                 let value = self.evaluate(expr)?;
 
-                if self.globals.contains_key(name.lexeme) {
-                    self.globals.insert(name.lexeme.to_string(), value.clone());
+                self.environment
+                    .borrow_mut()
+                    .assign(name.lexeme, value.clone(), name.line)?;
 
-                    Ok(value)
-                } else {
-                    Err(format!(
-                        "Undefined variable '{}' on line {}",
-                        name.lexeme, name.line
-                    ))
-                }
+                Ok(value)
             }
         }
     }
@@ -105,7 +117,7 @@ impl Interpreter {
     }
 
     fn evaluate_unary(&mut self, op: &Token, expr: &Expr) -> Result<Value, String> {
-        let value: Value = self.evaluate(expr)?;
+        let value = self.evaluate(expr)?;
 
         match op.token_type {
             TokenType::MINUS => match value {
@@ -121,8 +133,8 @@ impl Interpreter {
     }
 
     fn evaluate_binary(&mut self, left: &Expr, op: &Token, right: &Expr) -> Result<Value, String> {
-        let left_val: Value = self.evaluate(left)?;
-        let right_val: Value = self.evaluate(right)?;
+        let left_val = self.evaluate(left)?;
+        let right_val = self.evaluate(right)?;
 
         match op.token_type {
             TokenType::PLUS => match (left_val, right_val) {
@@ -191,12 +203,7 @@ impl Interpreter {
     }
 
     fn evaluate_variable(&self, token: &Token) -> Result<Value, String> {
-        self.globals.get(token.lexeme).cloned().ok_or_else(|| {
-            format!(
-                "Undefined variable '{}' on line {}",
-                token.lexeme, token.line
-            )
-        })
+        self.environment.borrow().get(token.lexeme, token.line)
     }
 }
 
