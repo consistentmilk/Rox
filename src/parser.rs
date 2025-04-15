@@ -36,6 +36,10 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_statement(&mut self) -> Result<Stmt<'a>, String> {
+        if self.match_tokens(&[TokenType::IF])? {
+            return self.if_statement();
+        }
+
         if self.match_tokens(&[TokenType::PRINT])? {
             return self.print_statement();
         }
@@ -55,6 +59,33 @@ impl<'a> Parser<'a> {
         self.expression_statement()
     }
 
+    fn if_statement(&mut self) -> Result<Stmt<'a>, String> {
+        if !self.match_tokens(&[TokenType::LEFT_PAREN])? {
+            return Err(format!(
+                "Expected '(' after 'if' on line {}",
+                self.peek()?.line
+            ));
+        }
+
+        let condition: Expr<'a> = self.expression()?;
+
+        if !self.match_tokens(&[TokenType::RIGHT_PAREN])? {
+            return Err(format!(
+                "Expected ')' after if condition on line {}",
+                self.peek()?.line
+            ));
+        }
+
+        let then_branch: Stmt<'a> = self.parse_statement()?;
+
+        let else_branch: Option<Box<Stmt<'a>>> = if self.match_tokens(&[TokenType::ELSE])? {
+            Some(Box::new(self.parse_statement()?))
+        } else {
+            None
+        };
+
+        Ok(Stmt::If(condition, Box::new(then_branch), else_branch))
+    }
     fn block(&mut self) -> Result<Stmt<'a>, String> {
         let mut statements = Vec::new();
 
