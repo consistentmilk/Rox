@@ -26,10 +26,15 @@ impl Interpreter {
     fn evaluate_literal(&self, token: &Token) -> Result<Value, String> {
         match &token.token_type {
             TokenType::NUMBER(n) => Ok(Value::Number(*n)),
+
             TokenType::STRING(s) => Ok(Value::String(s.clone())),
+
             TokenType::TRUE => Ok(Value::Bool(true)),
+
             TokenType::FALSE => Ok(Value::Bool(false)),
+
             TokenType::NIL => Ok(Value::Nil),
+
             _ => Err(format!("Invalid literal on line {}", token.line)),
         }
     }
@@ -40,10 +45,12 @@ impl Interpreter {
         match op.token_type {
             TokenType::MINUS => match value {
                 Value::Number(n) => Ok(Value::Number(-n)),
-                _ => Err(format!("Operand must be a number on line {}", op.line)),
+
+                _ => Err(format!("Operand must be a number. [line {}]", op.line)),
             },
 
             TokenType::BANG => Ok(Value::Bool(!is_truthy(&value))),
+
             _ => Err(format!("Invalid unary operator on line {}", op.line)),
         }
     }
@@ -55,7 +62,9 @@ impl Interpreter {
         match op.token_type {
             TokenType::PLUS => match (left_val, right_val) {
                 (Value::Number(a), Value::Number(b)) => Ok(Value::Number(a + b)),
+
                 (Value::String(a), Value::String(b)) => Ok(Value::String(a + &b)),
+
                 _ => Err(format!(
                     "Operands must be two numbers or two strings on line {}",
                     op.line
@@ -80,6 +89,7 @@ impl Interpreter {
                         Ok(Value::Number(a / b))
                     }
                 }
+
                 _ => Err(format!("Operands must be numbers on line {}", op.line)),
             },
 
@@ -89,21 +99,25 @@ impl Interpreter {
 
             TokenType::LESS => match (left_val, right_val) {
                 (Value::Number(a), Value::Number(b)) => Ok(Value::Bool(a < b)),
+
                 _ => Err(format!("Operands must be numbers on line {}", op.line)),
             },
 
             TokenType::LESS_EQUAL => match (left_val, right_val) {
                 (Value::Number(a), Value::Number(b)) => Ok(Value::Bool(a <= b)),
+
                 _ => Err(format!("Operands must be numbers on line {}", op.line)),
             },
 
             TokenType::GREATER => match (left_val, right_val) {
                 (Value::Number(a), Value::Number(b)) => Ok(Value::Bool(a > b)),
+
                 _ => Err(format!("Operands must be numbers on line {}", op.line)),
             },
 
             TokenType::GREATER_EQUAL => match (left_val, right_val) {
                 (Value::Number(a), Value::Number(b)) => Ok(Value::Bool(a >= b)),
+
                 _ => Err(format!("Operands must be numbers on line {}", op.line)),
             },
 

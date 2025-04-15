@@ -150,11 +150,13 @@ fn main() -> anyhow::Result<()> {
                         Ok(value) => {
                             println!("{}", value);
                         }
+
                         Err(e) => {
                             eprintln!("{}", e);
-                            std::process::exit(65);
+                            std::process::exit(70);
                         }
                     },
+
                     Err(e) => {
                         eprintln!("{}", e);
                         std::process::exit(65);
