@@ -67,7 +67,7 @@ impl Ast {
 
             Expr::Grouping(expr) => format!("(group {})", self.print(expr)),
 
-            Expr::Variable(_token) => todo!(),
+            Expr::Variable(token) => token.lexeme.to_string(),
         }
     }
 }

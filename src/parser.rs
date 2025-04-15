@@ -41,6 +41,10 @@ impl<'a> Parser<'a> {
             return self.print_statement();
         }
 
+        if self.match_tokens(&[TokenType::VAR])? {
+            return self.parse_var_statement();
+        }
+
         self.expression_statement()
     }
 
@@ -68,6 +72,35 @@ impl<'a> Parser<'a> {
         }
 
         Ok(Stmt::Expression(expr))
+    }
+
+    fn parse_var_statement(&mut self) -> Result<Stmt<'a>, String> {
+        // Expect an identifier
+        if !self.match_tokens(&[TokenType::IDENTIFIER])? {
+            return Err(format!(
+                "Expected variable name on line {}",
+                self.peek()?.line
+            ));
+        }
+
+        let name: Token<'a> = self.previous().clone();
+
+        // Optional initializer
+        let initializer = if self.match_tokens(&[TokenType::EQUAL])? {
+            Some(self.expression()?)
+        } else {
+            None
+        };
+
+        // Expect semicolon
+        if !self.match_tokens(&[TokenType::SEMICOLON])? {
+            return Err(format!(
+                "Expected ';' after variable declaration on line {}",
+                self.peek()?.line
+            ));
+        }
+
+        Ok(Stmt::Var(name, initializer))
     }
 
     fn expression(&mut self) -> Result<Expr<'a>, String> {
@@ -153,6 +186,10 @@ impl<'a> Parser<'a> {
             return Ok(Expr::Literal(self.previous().clone()));
         }
 
+        if self.match_tokens(&[TokenType::IDENTIFIER])? {
+            return Ok(Expr::Variable(self.previous().clone()));
+        }
+
         if self.match_tokens(&[TokenType::LEFT_PAREN])? {
             let expr: Expr<'a> = self.expression()?;
 
@@ -232,16 +269,19 @@ impl<'a> Iterator for Parser<'a> {
 
     fn next(&mut self) -> Option<Self::Item> {
         // Check if we're at EOF
-        match self.is_at_end() {
-            Ok(true) => return None,
-            Ok(false) => {}
+        match self.peek() {
+            Ok(token) if token.token_type == TokenType::EOF => return None,
+
+            Ok(_) => {}
+
             Err(e) => return Some(Err(e)),
         }
 
         // Try to parse a statement
         match self.parse_statement() {
             Ok(stmt) => Some(Ok(stmt)),
-            Err(e) => Some(Err(e)), // Yield the error directly
+
+            Err(e) => Some(Err(e)),
         }
     }
 }

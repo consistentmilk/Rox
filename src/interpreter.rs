@@ -1,16 +1,21 @@
+use std::collections::HashMap;
+
 use crate::expr::Expr;
 use crate::stmt::Stmt;
 use crate::token::{Token, TokenType};
 use crate::value::Value;
 
-pub struct Interpreter;
+pub struct Interpreter {
+    globals: HashMap<String, Value>,
+}
 
 impl Interpreter {
     pub fn new() -> Self {
-        Interpreter
+        Interpreter {
+            globals: HashMap::new(),
+        }
     }
-
-    pub fn execute(&self, stmt: &Stmt) -> Result<(), String> {
+    pub fn execute(&mut self, stmt: &Stmt) -> Result<(), String> {
         match stmt {
             Stmt::Expression(expr) => {
                 self.evaluate(expr)?;
@@ -21,6 +26,19 @@ impl Interpreter {
             Stmt::Print(expr) => {
                 let value = self.evaluate(expr)?;
                 println!("{}", value);
+
+                Ok(())
+            }
+
+            Stmt::Var(name, initializer) => {
+                let value = if let Some(expr) = initializer {
+                    self.evaluate(expr)?
+                } else {
+                    Value::Nil
+                };
+
+                // Clone lexeme for ownership
+                self.globals.insert(name.lexeme.to_string(), value);
 
                 Ok(())
             }
@@ -37,7 +55,7 @@ impl Interpreter {
 
             Expr::Grouping(expr) => self.evaluate(expr),
 
-            Expr::Variable(_token) => todo!(),
+            Expr::Variable(token) => self.evaluate_variable(token),
         }
     }
 
@@ -141,6 +159,15 @@ impl Interpreter {
 
             _ => Err(format!("Invalid binary operator on line {}", op.line)),
         }
+    }
+
+    fn evaluate_variable(&self, token: &Token) -> Result<Value, String> {
+        self.globals.get(token.lexeme).cloned().ok_or_else(|| {
+            format!(
+                "Undefined variable '{}' on line {}",
+                token.lexeme, token.line
+            )
+        })
     }
 }
 

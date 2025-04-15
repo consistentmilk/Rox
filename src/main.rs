@@ -138,7 +138,7 @@ fn main() -> anyhow::Result<()> {
 
                 let scanner: Scanner = Scanner::new(&buf);
                 let mut parser: Parser = Parser::new(scanner);
-                let interpreter: Interpreter = Interpreter::new();
+                let mut interpreter: Interpreter = Interpreter::new();
 
                 for stmt in &mut parser {
                     match stmt {
