@@ -24,8 +24,8 @@ static KEYWORDS: phf::Map<&'static [u8], TokenType> = phf_map! {
 };
 
 #[derive(Debug, Clone)]
-pub struct Scanner<'a> {
-    source: &'a [u8],
+pub struct Scanner {
+    source: Vec<u8>,
     start: usize,
     curr_ptr: usize,
     line: usize,
@@ -33,8 +33,8 @@ pub struct Scanner<'a> {
     pending_token: Option<TokenType>,
 }
 
-impl<'a> Scanner<'a> {
-    pub fn new(buf: &'a [u8]) -> Self {
+impl Scanner {
+    pub fn new(buf: Vec<u8>) -> Self {
         Self {
             source: buf,
             start: 0,
@@ -46,7 +46,7 @@ impl<'a> Scanner<'a> {
     }
 
     #[inline]
-    pub const fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.source.len()
     }
 
@@ -284,8 +284,8 @@ impl<'a> Scanner<'a> {
     }
 }
 
-impl<'a> Iterator for Scanner<'a> {
-    type Item = Result<Token<'a>, String>;
+impl Iterator for Scanner {
+    type Item = Result<Token, String>;
 
     ///
     /// ------- Part 1: Buffer Proces State -------
@@ -304,7 +304,7 @@ impl<'a> Iterator for Scanner<'a> {
         if self.is_at_end() {
             if self.curr_ptr == self.len() {
                 self.curr_ptr += 1;
-                return Some(Ok(Token::new(TokenType::EOF, "", self.line)));
+                return Some(Ok(Token::new(TokenType::EOF, "".to_string(), self.line)));
             }
 
             return None;
@@ -325,11 +325,11 @@ impl<'a> Iterator for Scanner<'a> {
             let lexeme =
                 unsafe { std::str::from_utf8_unchecked(&self.source[self.start..self.curr_ptr]) };
 
-            Some(Ok(Token::new(token_type, lexeme, self.line)))
+            Some(Ok(Token::new(token_type, lexeme.to_string(), self.line)))
         } else {
             self.next() // Recursively keep calling next until EOF is reached
         }
     }
 }
 
-impl<'a> FusedIterator for Scanner<'a> {}
+impl FusedIterator for Scanner {}

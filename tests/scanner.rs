@@ -6,7 +6,7 @@ mod scanner_tests {
     use lox::token::*;
 
     fn assert_token_sequence(source: &str, expected: &[(TokenType, &str)]) {
-        let scanner = Scanner::new(source.as_bytes());
+        let scanner = Scanner::new(source.into());
         let tokens: Vec<_> = scanner.filter_map(Result::ok).collect();
 
         assert_eq!(tokens.len(), expected.len());
@@ -39,7 +39,7 @@ mod scanner_tests {
     #[test]
     fn test_unexpected_chars_token_sequence() {
         let source = ",.$(#";
-        let scanner = Scanner::new(source.as_bytes());
+        let scanner = Scanner::new(source.as_bytes().to_vec());
 
         // Collect all results (both tokens and errors)
         let results: Vec<_> = scanner.collect();

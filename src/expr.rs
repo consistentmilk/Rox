@@ -1,25 +1,25 @@
 use crate::token::Token;
 
-#[derive(Debug)]
-pub enum Expr<'a> {
+#[derive(Debug, Clone)]
+pub enum Expr {
     // Used to parse Binary expressions
-    Binary(Box<Expr<'a>>, Token<'a>, Box<Expr<'a>>),
+    Binary(Box<Expr>, Token, Box<Expr>),
 
     // Used to parse Unary expressions
-    Unary(Token<'a>, Box<Expr<'a>>),
+    Unary(Token, Box<Expr>),
 
     // Used to parse Literal expressions
-    Literal(Token<'a>),
+    Literal(Token),
 
     // Used to parse parenthesized grouped expressions
-    Grouping(Box<Expr<'a>>),
+    Grouping(Box<Expr>),
 
     // Used to parse 'var' keyword expressions
-    Variable(Token<'a>),
+    Variable(Token),
 
     // Used to parse assignment operators
-    Assign(Token<'a>, Box<Expr<'a>>),
+    Assign(Token, Box<Expr>),
 
     // Used to parse function calls
-    Call(Box<Expr<'a>>, Token<'a>, Vec<Expr<'a>>),
+    Call(Box<Expr>, Token, Vec<Expr>),
 }

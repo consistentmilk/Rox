@@ -4,30 +4,64 @@ use crate::stmt::Stmt;
 use crate::token::{Token, TokenType};
 use crate::value::Value;
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::rc::Rc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, SystemTimeError, UNIX_EPOCH};
 
 pub struct Interpreter {
     environment: Rc<RefCell<Environment>>,
+    functions: HashMap<String, Stmt>,
 }
 
 impl Interpreter {
     pub fn new() -> Self {
-        let environment = Rc::new(RefCell::new(Environment::new()));
+        let environment: Rc<RefCell<Environment>> = Rc::new(RefCell::new(Environment::new()));
+
         environment.borrow_mut().define(
             "clock",
             Value::NativeFunction {
                 name: "clock".to_string(),
                 arity: 0,
-                func: clock_native,
+                func: |_args: &[Value]| {
+                    let timestamp: f64 = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .map_err(|e: SystemTimeError| format!("Clock error: {}", e))?
+                        .as_secs_f64();
+
+                    Ok(Value::Number(timestamp))
+                },
             },
         );
 
-        Interpreter { environment }
+        Interpreter {
+            environment,
+            functions: HashMap::new(),
+        }
+    }
+
+    pub fn interpret(&mut self, statements: &[Stmt]) -> Result<(), String> {
+        for stmt in statements {
+            self.execute(stmt)?;
+        }
+
+        Ok(())
     }
 
     pub fn execute(&mut self, stmt: &Stmt) -> Result<(), String> {
         match stmt {
+            Stmt::Function(name, parameters, _body) => {
+                let function: Value = Value::Function {
+                    name: name.lexeme.to_string(),
+                    arity: parameters.len(),
+                };
+
+                self.functions.insert(name.lexeme.to_string(), stmt.clone());
+
+                self.environment.borrow_mut().define(&name.lexeme, function);
+
+                Ok(())
+            }
+
             Stmt::Expression(expr) => {
                 self.evaluate(expr)?;
 
@@ -35,7 +69,7 @@ impl Interpreter {
             }
 
             Stmt::Print(expr) => {
-                let value = self.evaluate(expr)?;
+                let value: Value = self.evaluate(expr)?;
 
                 println!("{}", value);
 
@@ -49,7 +83,7 @@ impl Interpreter {
                     Value::Nil
                 };
 
-                self.environment.borrow_mut().define(name.lexeme, value);
+                self.environment.borrow_mut().define(&name.lexeme, value);
 
                 Ok(())
             }
@@ -59,7 +93,7 @@ impl Interpreter {
 
                 self.environment
                     .borrow_mut()
-                    .assign(name.lexeme, value, name.line)?;
+                    .assign(&name.lexeme, value, name.line)?;
 
                 Ok(())
             }
@@ -71,13 +105,7 @@ impl Interpreter {
                     Rc::new(RefCell::new(Environment::with_enclosing(previous.clone())));
 
                 for stmt in statements {
-                    match self.execute(stmt) {
-                        Ok(()) => {}
-                        Err(e) => {
-                            self.environment = previous;
-                            return Err(e);
-                        }
-                    }
+                    self.execute(stmt)?;
                 }
 
                 self.environment = previous;
@@ -104,18 +132,15 @@ impl Interpreter {
             }
 
             Stmt::For(initializer, condition, increment, body) => {
-                // Create new scope for loop
                 let previous: Rc<RefCell<Environment>> = self.environment.clone();
 
                 self.environment =
                     Rc::new(RefCell::new(Environment::with_enclosing(previous.clone())));
 
-                // Execute initializer
                 if let Some(init) = initializer {
                     self.execute(init)?;
                 }
 
-                // Loop
                 while is_truthy(
                     &condition
                         .as_ref()
@@ -128,7 +153,6 @@ impl Interpreter {
                     }
                 }
 
-                // Restore outer scope
                 self.environment = previous;
 
                 Ok(())
@@ -153,7 +177,7 @@ impl Interpreter {
 
                 self.environment
                     .borrow_mut()
-                    .assign(name.lexeme, value.clone(), name.line)?;
+                    .assign(&name.lexeme, value.clone(), name.line)?;
 
                 Ok(value)
             }
@@ -167,8 +191,19 @@ impl Interpreter {
                 }
 
                 match callee_val {
-                    #[allow(unused)]
-                    Value::NativeFunction { name, arity, func } => {
+                    Value::NativeFunction { func, arity, .. } => {
+                        if arguments.len() != arity {
+                            return Err(format!(
+                                "Expected {} arguments but got {} at line {}",
+                                arity,
+                                arguments.len(),
+                                paren.line
+                            ));
+                        }
+                        func(&arg_values)
+                    }
+
+                    Value::Function { name, arity } => {
                         if arguments.len() != arity {
                             return Err(format!(
                                 "Expected {} arguments but got {} at line {}",
@@ -178,7 +213,26 @@ impl Interpreter {
                             ));
                         }
 
-                        func(&arg_values)
+                        let function: &Stmt = self.functions.get(&name).ok_or_else(|| {
+                            format!("Undefined function '{}' at line {}", name, paren.line)
+                        })?;
+
+                        let Stmt::Function(_, _, body) = function else {
+                            return Err(format!("Invalid function '{}'", name));
+                        };
+
+                        let previous: Rc<RefCell<Environment>> = self.environment.clone();
+
+                        self.environment =
+                            Rc::new(RefCell::new(Environment::with_enclosing(previous.clone())));
+
+                        let result: Result<(), String> = self.execute(&body.clone());
+
+                        self.environment = previous;
+
+                        result?;
+
+                        Ok(Value::Nil)
                     }
 
                     _ => Err(format!("Can only call functions at line {}", paren.line)),
@@ -204,7 +258,7 @@ impl Interpreter {
     }
 
     fn evaluate_unary(&mut self, op: &Token, expr: &Expr) -> Result<Value, String> {
-        let value: Value = self.evaluate(expr)?;
+        let value = self.evaluate(expr)?;
 
         match op.token_type {
             TokenType::MINUS => match value {
@@ -230,9 +284,8 @@ impl Interpreter {
                     self.evaluate(right)
                 }
             }
-
             TokenType::AND => {
-                let left_val: Value = self.evaluate(left)?;
+                let left_val = self.evaluate(left)?;
 
                 if !is_truthy(&left_val) {
                     Ok(left_val)
@@ -240,6 +293,7 @@ impl Interpreter {
                     self.evaluate(right)
                 }
             }
+
             _ => {
                 let left_val: Value = self.evaluate(left)?;
                 let right_val: Value = self.evaluate(right)?;
@@ -313,8 +367,9 @@ impl Interpreter {
             }
         }
     }
+
     fn evaluate_variable(&self, token: &Token) -> Result<Value, String> {
-        self.environment.borrow().get(token.lexeme, token.line)
+        self.environment.borrow().get(&token.lexeme, token.line)
     }
 }
 
@@ -340,13 +395,4 @@ fn is_equal(left: &Value, right: &Value) -> bool {
 
         _ => false,
     }
-}
-
-fn clock_native(_args: &[Value]) -> Result<Value, String> {
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|e| format!("Clock error: {}", e))?
-        .as_secs_f64();
-
-    Ok(Value::Number(timestamp))
 }

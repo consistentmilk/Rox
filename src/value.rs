@@ -5,6 +5,12 @@ pub enum Value {
         arity: usize,
         func: fn(&[Value]) -> Result<Value, String>,
     },
+
+    Function {
+        name: String,
+        arity: usize,
+    },
+
     Number(f64),
     String(String),
     Bool(bool),
@@ -14,6 +20,8 @@ pub enum Value {
 impl std::fmt::Display for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Value::Function { name, .. } => write!(f, "<fn {}>", name),
+
             Value::NativeFunction { name, .. } => write!(f, "<native fn {}>", name),
 
             Value::Number(n) => {

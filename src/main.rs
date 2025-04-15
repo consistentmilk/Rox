@@ -45,7 +45,7 @@ fn main() -> anyhow::Result<()> {
                 let mut reader: BufReader<File> = BufReader::new(File::open(filename)?);
                 let _ = reader.read_to_end(&mut buf);
 
-                let mut scanner: Scanner = Scanner::new(&buf);
+                let mut scanner: Scanner = Scanner::new(buf);
                 let mut tokenized = true;
 
                 while let Some(token) = scanner.next() {
@@ -76,7 +76,7 @@ fn main() -> anyhow::Result<()> {
                 let mut reader: BufReader<File> = BufReader::new(File::open(filename)?);
                 let _ = reader.read_to_end(&mut buf);
 
-                let scanner: Scanner = Scanner::new(&buf);
+                let scanner: Scanner = Scanner::new(buf);
                 let mut parser: Parser = Parser::new(scanner);
 
                 match parser.parse() {
@@ -104,7 +104,7 @@ fn main() -> anyhow::Result<()> {
                 let mut reader: BufReader<File> = BufReader::new(File::open(filename)?);
                 let _ = reader.read_to_end(&mut buf);
 
-                let scanner: Scanner = Scanner::new(&buf);
+                let scanner: Scanner = Scanner::new(buf);
                 let mut parser: Parser = Parser::new(scanner);
                 let mut interpreter: Interpreter = Interpreter::new();
 
@@ -139,7 +139,7 @@ fn main() -> anyhow::Result<()> {
                 let mut reader: BufReader<File> = BufReader::new(File::open(filename)?);
                 let _ = reader.read_to_end(&mut buf);
 
-                let scanner: Scanner = Scanner::new(&buf);
+                let scanner: Scanner = Scanner::new(buf);
                 let mut parser: Parser = Parser::new(scanner);
                 let mut interpreter: Interpreter = Interpreter::new();
 

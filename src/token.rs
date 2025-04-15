@@ -99,14 +99,14 @@ impl PartialEq for TokenType {
 }
 
 #[derive(Debug, Clone)]
-pub struct Token<'a> {
+pub struct Token {
     pub token_type: TokenType,
-    pub lexeme: &'a str,
+    pub lexeme: String,
     pub line: usize,
 }
 
-impl<'a> Token<'a> {
-    pub fn new(token_type: TokenType, lexeme: &'a str, line: usize) -> Self {
+impl Token {
+    pub fn new(token_type: TokenType, lexeme: String, line: usize) -> Self {
         Self {
             token_type,
             lexeme,
@@ -115,7 +115,7 @@ impl<'a> Token<'a> {
     }
 }
 
-impl<'a> std::fmt::Display for Token<'a> {
+impl std::fmt::Display for Token {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let literal: &str = match &self.token_type {
             TokenType::STRING(literal) => literal,
