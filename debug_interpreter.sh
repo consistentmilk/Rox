@@ -1,1 +1,1 @@
-RUST_LOG=debug cargo run -- run input.txt
+RUST_LOG=debug cargo run -- --log run input.txt

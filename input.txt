@@ -1,8 +1,22 @@
-fun fib(n) {
-  if (n < 2) return n;
-  return fib(n - 2) + fib(n - 1);
+// This program uses for loops and block scopes<|SPACE|>// to print the updates to the same variable
+var foo = "after";
+{
+  var foo = "before";
+
+  for (var foo = 0; foo < 1; foo = foo + 1) {
+    print foo;
+    var foo = -1;
+    print foo;
+  }
 }
 
-var start = clock();
-print fib(32) == 2178309;
-print (clock() - start) < 5; // 5 seconds
+{
+  for (var foo = 0; foo > 0; foo = foo + 1) {}
+
+  var foo = "after";
+  print foo;
+
+  for (foo = 0; foo < 1; foo = foo + 1) {
+    print foo;
+  }
+}

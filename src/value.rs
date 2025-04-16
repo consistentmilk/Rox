@@ -1,8 +1,11 @@
-#[derive(Debug, Clone, PartialEq)]
+use serde::Serialize;
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub enum Value {
     NativeFunction {
         name: String,
         arity: usize,
+        #[serde(skip)]
         func: fn(&[Value]) -> Result<Value, String>,
     },
 

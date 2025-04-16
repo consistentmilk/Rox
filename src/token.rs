@@ -1,8 +1,9 @@
 use log::{debug, info};
+use serde::Serialize;
 use std::fmt;
 
 #[allow(non_camel_case_types)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub enum TokenType {
     // Single-character tokens.
     LEFT_PAREN,
@@ -30,6 +31,7 @@ pub enum TokenType {
     // Literals.
     IDENTIFIER,
     STRING(String),
+    #[serde(rename = "NUMBER")]
     NUMBER(f64),
 
     // Keywords.
@@ -108,7 +110,7 @@ impl PartialEq for TokenType {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Token {
     pub token_type: TokenType,
     pub lexeme: String,

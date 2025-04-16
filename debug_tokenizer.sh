@@ -1,1 +1,1 @@
-RUST_LOG=debug cargo run -- tokenize input.txt
+RUST_LOG=debug cargo run -- --log tokenize input.txt
