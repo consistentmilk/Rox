@@ -2,7 +2,7 @@ use serde::Serialize;
 
 use crate::token::Token;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, PartialEq)]
 pub enum Expr {
     // Used to parse Binary expressions
     Binary(Box<Expr>, Token, Box<Expr>),

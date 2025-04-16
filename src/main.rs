@@ -44,11 +44,14 @@ enum Commands {
 /// Reads the contents of a file into a Vec<u8>
 fn read_file(filename: PathBuf) -> Result<Vec<u8>> {
     info!("Reading file: {:?}", filename);
-    let file = File::open(&filename).context(format!("Failed to open file {:?}", filename))?;
-    let mut reader = BufReader::new(file);
-    let mut buf = Vec::new();
 
-    let bytes = reader
+    let file: File =
+        File::open(&filename).context(format!("Failed to open file {:?}", filename))?;
+
+    let mut reader: BufReader<File> = BufReader::new(file);
+    let mut buf: Vec<u8> = Vec::new();
+
+    let bytes: usize = reader
         .read_to_end(&mut buf)
         .context(format!("Failed to read file {:?}", filename))?;
 
@@ -59,7 +62,7 @@ fn read_file(filename: PathBuf) -> Result<Vec<u8>> {
 
 fn init_logger() -> Result<()> {
     // Create or open the log file
-    let log_file = File::create("app.log").context("Failed to create app.log")?;
+    let log_file: File = File::create("app.log").context("Failed to create app.log")?;
 
     // Configure env_logger to write to file with statement number and source line
     Builder::new()
@@ -70,6 +73,7 @@ fn init_logger() -> Result<()> {
                 .unwrap_or("<unnamed>")
                 .strip_prefix("codecrafters_interpreter::")
                 .unwrap_or(record.module_path().unwrap_or("<unnamed>"));
+
             writeln!(
                 buf,
                 "[{}:{}] - {}",

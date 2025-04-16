@@ -192,6 +192,8 @@ impl Parser {
     fn for_statement(&mut self) -> Result<Stmt, String> {
         debug!("Parsing for statement");
 
+        let for_token = self.previous().clone();
+
         if !self.match_tokens(&[TokenType::LEFT_PAREN])? {
             debug!("Missing '(' after 'for'");
 
@@ -278,15 +280,21 @@ impl Parser {
             }
         };
 
-        if matches!(body, Stmt::Var(_, _)) {
-            debug!("Invalid for body");
-
-            return Err(self.error_at_previous("Expected expression"));
+        if let Stmt::Var(_, _) = body {
+            return Err(self.error_at_previous(
+                "Variables must be declared inside a block, not alone in a for loop",
+            ));
         }
 
         info!("Parsed for statement");
 
-        Ok(Stmt::For(initializer, condition, increment, Box::new(body)))
+        Ok(Stmt::For(
+            for_token.line,
+            initializer,
+            condition,
+            increment,
+            Box::new(body),
+        ))
     }
 
     fn while_statement(&mut self) -> Result<Stmt, String> {
@@ -362,6 +370,8 @@ impl Parser {
     fn block(&mut self) -> Result<Stmt, String> {
         debug!("Parsing block");
 
+        let left_brace_token = self.previous().clone();
+
         let mut statements: Vec<Stmt> = Vec::new();
 
         while !self.check(&TokenType::RIGHT_BRACE)? && !self.is_at_end()? {
@@ -378,7 +388,7 @@ impl Parser {
 
         info!("Parsed block with {} statements", statements.len());
 
-        Ok(Stmt::Block(statements))
+        Ok(Stmt::Block(statements, left_brace_token.line))
     }
 
     fn assign_statement(&mut self) -> Result<Stmt, String> {
@@ -621,7 +631,17 @@ impl Parser {
             return Ok(Expr::Unary(operator, Box::new(right)));
         }
 
-        self.primary()
+        self.call()
+    }
+
+    fn call(&mut self) -> Result<Expr, String> {
+        let mut expr: Expr = self.primary()?;
+
+        while self.check(&TokenType::LEFT_PAREN)? {
+            expr = self.parse_call(expr)?;
+        }
+
+        Ok(expr)
     }
 
     fn primary(&mut self) -> Result<Expr, String> {
@@ -645,12 +665,6 @@ impl Parser {
             let identifier: Token = self.previous().clone();
 
             debug!("Found identifier: {}", identifier.lexeme);
-
-            if self.check(&TokenType::LEFT_PAREN)? {
-                debug!("Identifier followed by '(', parsing call");
-
-                return self.parse_call(Expr::Variable(identifier));
-            }
 
             info!("Parsed variable: {}", identifier.lexeme);
 

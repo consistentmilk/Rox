@@ -69,9 +69,22 @@ impl Ast {
 
             Expr::Variable(token) => token.lexeme.to_string(),
 
-            Expr::Assign(_name, _expr) => todo!(),
+            Expr::Assign(name, expr) => {
+                format!("(assign {} {})", name.lexeme, self.print(expr))
+            }
 
-            Expr::Call(_a, _b, _c) => todo!(),
+            Expr::Call(callee, _paren, args) => {
+                let mut out = format!("(call {}", self.print(callee));
+
+                for arg in args {
+                    out.push(' ');
+                    out.push_str(&self.print(arg));
+                }
+
+                out.push(')');
+
+                out
+            }
         }
     }
 }

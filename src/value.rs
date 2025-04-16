@@ -1,17 +1,19 @@
-use serde::Serialize;
+use std::{cell::RefCell, rc::Rc};
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+use crate::environment::Environment;
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     NativeFunction {
         name: String,
         arity: usize,
-        #[serde(skip)]
         func: fn(&[Value]) -> Result<Value, String>,
     },
 
     Function {
         name: String,
         arity: usize,
+        closure: Rc<RefCell<Environment>>,
     },
 
     Number(f64),

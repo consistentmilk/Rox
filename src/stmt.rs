@@ -3,7 +3,7 @@ use serde::Serialize;
 use crate::expr::Expr;
 use crate::token::Token;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, PartialEq)]
 pub enum Stmt {
     Expression(Expr),
 
@@ -13,14 +13,15 @@ pub enum Stmt {
 
     Assign(Token, Expr),
 
-    Block(Vec<Stmt>),
+    Block(Vec<Stmt>, usize),
 
     If(Expr, Box<Stmt>, Option<Box<Stmt>>),
 
     While(Expr, Box<Stmt>),
 
     For(
-        Option<Box<Stmt>>, // initializer (var or expr stmt), boxed
+        usize,             // store line for 'for' token
+        Option<Box<Stmt>>, // initializer
         Option<Expr>,      // condition
         Option<Expr>,      // increment
         Box<Stmt>,         // body
@@ -44,13 +45,13 @@ impl Stmt {
 
             Stmt::Assign(token, _) => token.line,
 
-            Stmt::Block(_) => 0, // Blocks don't have a single line; use 0 or handle differently
-
             Stmt::If(expr, _, _) => expr.line(),
 
             Stmt::While(expr, _) => expr.line(),
 
-            Stmt::For(_, _, _, _) => 0, // Use initializer or condition line if needed
+            Stmt::Block(_, line) => *line,
+            
+            Stmt::For(line, _, _, _, _) => *line,
 
             Stmt::Return(token, _) => token.line,
         }

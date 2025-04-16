@@ -110,7 +110,7 @@ impl PartialEq for TokenType {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct Token {
     pub token_type: TokenType,
     pub lexeme: String,
