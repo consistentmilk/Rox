@@ -59,6 +59,11 @@ impl<'a, 'interp> Resolver<'a, 'interp> {
     fn resolve_stmt(&mut self, stmt: &Stmt<'a>) -> Result<()> {
         debug!("Resolving stmt: {:?}", stmt);
         match stmt {
+            Stmt::Class { name } => {
+                self.declare(name)?;
+                self.define(name);
+            }
+
             Stmt::Block(statements) => {
                 // ① Push a new anonymous scope for `{ … }`
                 self.begin_scope();
@@ -276,7 +281,7 @@ impl<'a, 'interp> Resolver<'a, 'interp> {
     ///  - a local at depth `d`, or
     ///  - a global if not found in *any* scope.
     fn resolve_local(&mut self, expr: &Expr<'a>, name: &Token<'a>) {
-        // 1️⃣ check innermost → outermost
+        // 1. check innermost → outermost
         for (depth, scope) in self.scopes.iter().rev().enumerate() {
             if scope.contains_key(name.lexeme) {
                 debug!("Resolved '{}' at depth {}", name.lexeme, depth);
@@ -284,8 +289,10 @@ impl<'a, 'interp> Resolver<'a, 'interp> {
                 return;
             }
         }
-        // 2️⃣ not found in any local scope ⇒ global
+
+        // 2. not found in any local scope ⇒ global
         debug!("Resolved '{}' as global", name.lexeme);
+
         self.interpreter.note_global(expr);
     }
 }

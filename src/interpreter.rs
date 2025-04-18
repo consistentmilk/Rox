@@ -61,11 +61,18 @@ enum Control<'a> {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Value<'a> {
     Nil,
+
     Boolean(bool),
+
     Number(f64),
+
     Str(String),
+
     Function(LoxFunction<'a>),
+
     NativeFunction(NativeFunction<'a>),
+
+    Class(LoxClass),
 }
 
 impl<'a> std::fmt::Display for Value<'a> {
@@ -82,7 +89,23 @@ impl<'a> std::fmt::Display for Value<'a> {
             Value::Function(fun) => write!(f, "<fn {}>", fun.name),
 
             Value::NativeFunction(nf) => write!(f, "<native fn {}>", nf.name),
+
+            Value::Class(class) => write!(f, "{}", class),
         }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Classes (OOP)
+// ─────────────────────────────────────────────────────────────────────────────
+#[derive(Debug, PartialEq, Clone)]
+pub struct LoxClass {
+    pub name: String,
+}
+
+impl std::fmt::Display for LoxClass {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.name)
     }
 }
 
@@ -440,7 +463,20 @@ impl<'a> Interpreter<'a> {
                     .unwrap_or(Value::Nil);
                 return Ok(Control::Return(v));
             }
+
+            Stmt::Class { name } => {
+                let klass: LoxClass = LoxClass {
+                    name: name.lexeme.to_string(),
+                };
+
+                self.env
+                    .borrow_mut()
+                    .define(name.lexeme, Value::Class(klass));
+
+                Control::Normal
+            }
         };
+
         Ok(ctrl)
     }
 

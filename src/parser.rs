@@ -221,6 +221,10 @@ pub enum Stmt<'a> {
         /// Absent ⇒ `nil` is returned.
         value: Option<Expr<'a>>,
     },
+
+    Class {
+        name: &'a Token<'a>,
+    },
 }
 
 /// Top‑level parser over an immutable slice of tokens.
@@ -257,7 +261,9 @@ impl<'a> Parser<'a> {
     fn declaration(&mut self) -> Result<Stmt<'a>> {
         debug!("Entering declaration");
 
-        let result = if self.matches(TokenType::FUN) {
+        let result = if self.matches(TokenType::CLASS) {
+            self.class_declaration()
+        } else if self.matches(TokenType::FUN) {
             self.function("function")
         } else if self.matches(TokenType::VAR) {
             self.var_declaration()
@@ -270,6 +276,15 @@ impl<'a> Parser<'a> {
         }
 
         result
+    }
+
+    fn class_declaration(&mut self) -> Result<Stmt<'a>> {
+        let name: &Token<'_> = self.consume(TokenType::IDENTIFIER, "Expected class name")?;
+
+        self.consume(TokenType::LEFT_BRACE, "Expected '{' before class body")?;
+        self.consume(TokenType::RIGHT_BRACE, "Expected '}' after class body")?;
+
+        Ok(Stmt::Class { name })
     }
 
     fn function(&mut self, _kind: &str) -> Result<Stmt<'a>> {
