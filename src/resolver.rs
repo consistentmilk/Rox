@@ -19,6 +19,7 @@ use std::collections::HashMap;
 enum FunctionType {
     None,
     Function,
+    Initializer,
 }
 
 #[allow(unused)]
@@ -75,27 +76,52 @@ impl<'a, 'interp> Resolver<'a, 'interp> {
                 self.define(name);
 
                 // 2. Mark that we are inside a class
-                let enclosing_class = self.current_class;
+                let enclosing_class: ClassType = self.current_class;
                 self.current_class = ClassType::Class;
 
                 // 3. For each method, open a 'this' scope, then resolve the method body
                 for method in methods.iter() {
-                    if let Stmt::Function { params, body, .. } = method {
-                        // 3. Begin a fresh scope for 'this'
+                    if let Stmt::Function {
+                        name: m_name,
+                        params,
+                        body,
+                    } = method
+                    {
+                        // 4. Mark enclosing function type
+                        let enclosing: FunctionType = self.current_function;
+
+                        self.current_function = if m_name.lexeme == "init" {
+                            FunctionType::Initializer
+                        } else {
+                            FunctionType::Function
+                        };
+
+                        // 4. Begin a fresh scope for 'this'
                         self.begin_scope();
 
-                        // 4. Mark 'this' as already defined
+                        // 5. Inject 'this' so Expr::This will resolve
                         self.scopes.last_mut().unwrap().insert("this", true);
 
-                        // 5. Resolve the function body (will see "this" in scope)
-                        self.resolve_function(params, body)?;
+                        // 6. Declare and define parameters
+                        for params in params {
+                            self.declare(params)?;
+                            self.define(params);
+                        }
+
+                        // 7. Resolve the body statements
+                        for stmt in body {
+                            self.resolve_stmt(stmt)?;
+                        }
 
                         // 6. Pop the 'this' scope
                         self.end_scope();
+
+                        // 7. Restore enclosing function
+                        self.current_function = enclosing;
                     }
                 }
 
-                // 7. Restore the outer class context
+                // 8. Restore the outer class context
                 self.current_class = enclosing_class;
             }
 
@@ -183,15 +209,29 @@ impl<'a, 'interp> Resolver<'a, 'interp> {
             }
 
             Stmt::Return { keyword, value } => {
-                // ⑧ return only allowed inside a function
+                // Return only allowed in functions/initializers
                 if self.current_function == FunctionType::None {
                     return Err(LoxError::resolve(
                         keyword.line,
                         "'return' used outside of function",
                     ));
                 }
-                if let Some(expr) = value {
-                    self.resolve_expr(expr)?;
+
+                // If an initializer, bare 'return;' is oaky, but not 'return expr;'
+                if self.current_function == FunctionType::Initializer {
+                    if value.is_some() {
+                        return Err(LoxError::resolve(
+                            keyword.line,
+                            "Can't return a value from an initializer.",
+                        ));
+                    }
+
+                    // No Expression to resolve for a bare return
+                } else {
+                    // Normal function: resolve returned expression
+                    if let Some(expr) = value {
+                        self.resolve_expr(expr)?
+                    }
                 }
             }
         }
