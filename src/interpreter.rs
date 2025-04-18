@@ -73,6 +73,8 @@ pub enum Value<'a> {
     NativeFunction(NativeFunction<'a>),
 
     Class(LoxClass),
+
+    Instance(LoxInstance),
 }
 
 impl<'a> std::fmt::Display for Value<'a> {
@@ -91,6 +93,8 @@ impl<'a> std::fmt::Display for Value<'a> {
             Value::NativeFunction(nf) => write!(f, "<native fn {}>", nf.name),
 
             Value::Class(class) => write!(f, "{}", class),
+
+            Value::Instance(object) => write!(f, "{}", object),
         }
     }
 }
@@ -98,14 +102,42 @@ impl<'a> std::fmt::Display for Value<'a> {
 // ─────────────────────────────────────────────────────────────────────────────
 // Classes (OOP)
 // ─────────────────────────────────────────────────────────────────────────────
+/// A user-defined class
 #[derive(Debug, PartialEq, Clone)]
 pub struct LoxClass {
     pub name: String,
 }
 
+impl LoxClass {
+    /// Instantiates `this()` and returns the new object.
+    fn instantiate(&self) -> LoxInstance {
+        LoxInstance {
+            class: self.clone(),
+        }
+    }
+
+    /// For now, classes take no constructor arguments.
+    #[inline(always)]
+    fn arity(&self) -> usize {
+        0
+    }
+}
+
 impl std::fmt::Display for LoxClass {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.name)
+    }
+}
+
+/// An object instance produced by `ClassName()`
+#[derive(Debug, PartialEq, Clone)]
+pub struct LoxInstance {
+    pub class: LoxClass,
+}
+
+impl std::fmt::Display for LoxInstance {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} instance", self.class.name)
     }
 }
 
@@ -635,6 +667,19 @@ impl<'a> Interpreter<'a> {
                         }
 
                         fun.call(self, args)
+                    }
+
+                    Value::Class(class) => {
+                        if args.len() != class.arity() {
+                            return Err(LoxError::Runtime(format!(
+                                "Expected {} args but got {} (line {})",
+                                class.arity(),
+                                args.len(),
+                                paren.line
+                            )));
+                        }
+
+                        Ok(Value::Instance(class.instantiate()))
                     }
 
                     _ => Err(LoxError::Runtime(format!(
