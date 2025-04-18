@@ -260,10 +260,17 @@ impl<'a> LoxFunction<'a> {
             }
         }
 
-        // 5. Restore the previous environment:
+        // 5. Choose return
+        let result: Value<'_> = if self.name == "init" {
+            rc_child.borrow().get("this").unwrap_or(Value::Nil)
+        } else {
+            retval
+        };
+
+        // 6. Restore the previous environment:
         interp.env = prev_env;
 
-        Ok(retval)
+        Ok(result)
     }
 
     /// Create a bound method where `this` is defined to `instance`.
@@ -787,7 +794,7 @@ impl<'a> Interpreter<'a> {
                         }
 
                         // Always return the instance
-                        Ok(Value::Instance(class.instantiate()))
+                        Ok(Value::Instance(instance))
                     }
 
                     _ => Err(LoxError::Runtime(format!(

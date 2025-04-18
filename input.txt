@@ -1,15 +1,13 @@
-// This variable is used in the function `f` below.
-var variable = "global";
-
-{
-fun f() {
-print variable;
+class Default {
+  // this is the constructor
+  init() {
+    // it should be able to set<|SPACE|>    // properties on the instance
+    this.x = "foo";
+    this.y = 91;
+  }
 }
 
-f(); // this should print "global"
-
-// This variable declaration shouldn't affect the usage in `f` above.
-var variable = "local";
-
-f(); // this should still print "global"
-}
+// the constructor should be called
+// automatically  when the class is being<|SPACE|>// instantiated
+print Default().x;
+print Default().y;
