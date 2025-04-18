@@ -25,7 +25,7 @@ use crate::error::{LoxError, Result};
 use crate::parser::{Expr, LiteralValue, Stmt};
 use crate::token::{Token, TokenType};
 use log::{debug, info};
-use std::cell::RefCell;
+use std::cell::{RefCell, RefMut};
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -144,19 +144,22 @@ impl<'a> LoxInstance<'a> {
     }
 
     pub fn get_property(&self, name: &Token<'a>) -> Result<Value<'a>> {
-        let key = name.lexeme;
+        let key: &str = name.lexeme;
 
-        // 1) fields
+        // 1. Instance Fields
         if let Some(v) = self.fields.borrow().get(key) {
             return Ok(v.clone());
         }
 
-        // 2) methods
+        // 2. Class Methods
         if let Some(method) = self.class.methods.get(key) {
-            return Ok(Value::Function(method.clone()));
+            // Bind 'this' so 'this' inside the method body refers here.
+            let bound: LoxFunction<'a> = method.bind(Value::Instance(self.clone()));
+
+            return Ok(Value::Function(bound));
         }
 
-        // 3) not found
+        // 3. Mot found
         Err(LoxError::Runtime(format!(
             "Undefined property '{}' (line {}).",
             key, name.line
@@ -252,6 +255,24 @@ impl<'a> LoxFunction<'a> {
 
         Ok(retval)
     }
+
+    /// Create a bound method where `this` is defined to `instance`.
+    pub fn bind(&self, instance: Value<'a>) -> LoxFunction<'a> {
+        // 1. Create a new environment whose parent is the function's closure.
+        let env: Environment<'_> = Environment::with_enclosing(Rc::clone(&self.closure));
+        let rc_env: Rc<RefCell<Environment<'_>>> = Rc::new(RefCell::new(env));
+
+        // 2. Define "this" in the newly created environment.
+        rc_env.borrow_mut().define("this", instance);
+
+        // 3. Return a new LoxFunction with the same code but wtth this closure.
+        LoxFunction {
+            name: self.name.clone(),
+            params: self.params.clone(),
+            body: self.body,
+            closure: rc_env,
+        }
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -331,9 +352,9 @@ impl<'a> Interpreter<'a> {
     /// Create a new interpreter, initializing the global scope.
     pub fn new() -> Self {
         info!("Interpreter instantiated");
-        let globals = Rc::new(RefCell::new(Environment::new()));
+        let globals: Rc<RefCell<Environment<'_>>> = Rc::new(RefCell::new(Environment::new()));
         {
-            let mut g = globals.borrow_mut();
+            let mut g: RefMut<'_, Environment<'_>> = globals.borrow_mut();
             // Register clock(): → seconds since UNIX_EPOCH
             g.define(
                 "clock",
@@ -748,6 +769,11 @@ impl<'a> Interpreter<'a> {
                         paren.line
                     ))),
                 }
+            }
+
+            Expr::This(keyword) => {
+                // Look up 'this' via the resolver's recorded depth.
+                self.look_up_variable(keyword, expr)
             }
 
             Expr::Get { object, name } => {

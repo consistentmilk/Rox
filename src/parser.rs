@@ -172,6 +172,9 @@ pub enum Expr<'a> {
         name: &'a Token<'a>,
         value: Box<Expr<'a>>,
     },
+
+    /// The 'this' keyword inside a method.
+    This(&'a Token<'a>),
 }
 
 /// **Abstract‑Syntax‑Tree node** for *statements* (complete executable
@@ -740,6 +743,10 @@ impl<'a> Parser<'a> {
             self.consume(TokenType::RIGHT_PAREN, "Expected ')' after expression")?;
 
             return Ok(Expr::Grouping(Box::new(expr)));
+        }
+
+        if self.matches(TokenType::THIS) {
+            return Ok(Expr::This(self.previous()));
         }
 
         Err(LoxError::parse(self.peek().line, "Expected expression"))

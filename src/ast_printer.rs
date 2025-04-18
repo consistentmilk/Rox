@@ -72,6 +72,9 @@ impl AstPrinter {
                 name,
                 value,
             } => todo!(),
+
+            #[allow(unused)]
+            Expr::This(keyword) => todo!(),
         }
     }
 }

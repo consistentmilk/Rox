@@ -21,12 +21,20 @@ enum FunctionType {
     Function,
 }
 
+#[allow(unused)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+enum ClassType {
+    None,
+    Class,
+}
+
 /// Resolver: tracks scopes, enforces static rules, and *records* binding
 /// distances (locals vs. globals) by calling back into the interpreter.
 pub struct Resolver<'a, 'interp> {
     interpreter: &'interp mut Interpreter<'a>,
     scopes: Vec<HashMap<&'a str, bool>>, // false=declared, true=defined
     current_function: FunctionType,
+    current_class: ClassType,
 }
 
 impl<'a, 'interp> Resolver<'a, 'interp> {
@@ -37,6 +45,7 @@ impl<'a, 'interp> Resolver<'a, 'interp> {
             interpreter,
             scopes: Vec::new(),
             current_function: FunctionType::None,
+            current_class: ClassType::None,
         }
     }
 
@@ -58,23 +67,36 @@ impl<'a, 'interp> Resolver<'a, 'interp> {
 
     fn resolve_stmt(&mut self, stmt: &Stmt<'a>) -> Result<()> {
         debug!("Resolving stmt: {:?}", stmt);
+
         match stmt {
             Stmt::Class { name, methods } => {
-                // Declare & define the class name so methods can refer to it
+                // 1. Declare & define the class name so methods can refer to it
                 self.declare(name)?;
                 self.define(name);
 
-                // Resolve each method as a function (enables 'return' inside)
-                for method in methods {
-                    if let Stmt::Function {
-                        name: _m_name,
-                        params,
-                        body,
-                    } = method
-                    {
+                // 2. Mark that we are inside a class
+                let enclosing_class = self.current_class;
+                self.current_class = ClassType::Class;
+
+                // 3. For each method, open a 'this' scope, then resolve the method body
+                for method in methods.iter() {
+                    if let Stmt::Function { params, body, .. } = method {
+                        // 3. Begin a fresh scope for 'this'
+                        self.begin_scope();
+
+                        // 4. Mark 'this' as already defined
+                        self.scopes.last_mut().unwrap().insert("this", true);
+
+                        // 5. Resolve the function body (will see "this" in scope)
                         self.resolve_function(params, body)?;
+
+                        // 6. Pop the 'this' scope
+                        self.end_scope();
                     }
                 }
+
+                // 7. Restore the outer class context
+                self.current_class = enclosing_class;
             }
 
             Stmt::Block(statements) => {
@@ -225,6 +247,18 @@ impl<'a, 'interp> Resolver<'a, 'interp> {
                 for arg in arguments {
                     self.resolve_expr(arg)?;
                 }
+            }
+
+            Expr::This(keyword) => {
+                if self.current_class == ClassType::None {
+                    return Err(LoxError::resolve(
+                        keyword.line,
+                        "Cannot use 'this' outside of a class",
+                    ));
+                }
+
+                // Bind `this` like a local so the interpreter can find it.
+                self.resolve_local(expr, keyword);
             }
 
             Expr::Get { object, .. } => self.resolve_expr(object)?,
