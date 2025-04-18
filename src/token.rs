@@ -1,128 +1,173 @@
 use log::{debug, info};
 use serde::Serialize;
 use std::fmt;
+use std::mem;
 
+/// The different kinds of tokens recognized by the Lox scanner.
+///
+/// Variants without data represent single‑character or keyword tokens.
+/// `STRING(String)` and `NUMBER(f64)` carry their literal values.
+/// `IDENTIFIER` is used for user‑defined names.
+/// `EOF` marks the end of input.
 #[allow(non_camel_case_types)]
 #[derive(Debug, Clone, Serialize)]
 pub enum TokenType {
-    // Single-character tokens.
+    /// '('
     LEFT_PAREN,
+
+    /// ')'
     RIGHT_PAREN,
+
+    /// '{'
     LEFT_BRACE,
+
+    /// '}'
     RIGHT_BRACE,
+
+    /// ','
     COMMA,
+
+    /// '.'
     DOT,
+
+    /// '-'
     MINUS,
+
+    /// '+'
     PLUS,
+
+    /// ';'
     SEMICOLON,
+
+    /// '/'
     SLASH,
+
+    /// '*'
     STAR,
 
-    // One or two character tokens.
+    /// '!'
     BANG,
+
+    /// '!='
     BANG_EQUAL,
+
+    /// '='
     EQUAL,
+
+    /// '=='
     EQUAL_EQUAL,
+
+    /// '>'
     GREATER,
+
+    /// '>='
     GREATER_EQUAL,
+
+    /// '<'
     LESS,
+
+    /// '<='
     LESS_EQUAL,
 
-    // Literals.
+    /// A user‑defined identifier
     IDENTIFIER,
+
+    /// A string literal (contents without quotes)
     STRING(String),
+
+    /// A numeric literal
     #[serde(rename = "NUMBER")]
     NUMBER(f64),
 
-    // Keywords.
+    /// 'and'
     AND,
+
+    /// 'class'
     CLASS,
+
+    /// 'else'
     ELSE,
+
+    /// 'false'
     FALSE,
+
+    /// 'fun'
     FUN,
+
+    /// 'for'
     FOR,
+
+    /// 'if'
     IF,
+
+    /// 'nil'
     NIL,
+
+    /// 'or'
     OR,
+
+    /// 'print'
     PRINT,
+
+    /// 'return'
     RETURN,
+
+    /// 'super'
     SUPER,
+
+    /// 'this'
     THIS,
+
+    /// 'true'
     TRUE,
+
+    /// 'var'
     VAR,
+
+    /// 'while'
     WHILE,
 
-    // Special Characters
+    /// End‑of‑file marker
     EOF,
 }
 
 impl PartialEq for TokenType {
+    /// Two TokenTypes are equal if they share the same variant
+    /// (ignoring any inner data). Uses `mem::discriminant` to compare.
     fn eq(&self, other: &Self) -> bool {
         debug!("Comparing TokenType: self={:?}, other={:?}", self, other);
-        match (self, other) {
-            (TokenType::NUMBER(_), TokenType::NUMBER(_)) => true,
-            (TokenType::STRING(_), TokenType::STRING(_)) => true,
-            (TokenType::LEFT_PAREN, TokenType::LEFT_PAREN)
-            | (TokenType::RIGHT_PAREN, TokenType::RIGHT_PAREN)
-            | (TokenType::LEFT_BRACE, TokenType::LEFT_BRACE)
-            | (TokenType::RIGHT_BRACE, TokenType::RIGHT_BRACE)
-            | (TokenType::COMMA, TokenType::COMMA)
-            | (TokenType::DOT, TokenType::DOT)
-            | (TokenType::MINUS, TokenType::MINUS)
-            | (TokenType::PLUS, TokenType::PLUS)
-            | (TokenType::SEMICOLON, TokenType::SEMICOLON)
-            | (TokenType::SLASH, TokenType::SLASH)
-            | (TokenType::STAR, TokenType::STAR)
-            | (TokenType::BANG, TokenType::BANG)
-            | (TokenType::BANG_EQUAL, TokenType::BANG_EQUAL)
-            | (TokenType::EQUAL, TokenType::EQUAL)
-            | (TokenType::EQUAL_EQUAL, TokenType::EQUAL_EQUAL)
-            | (TokenType::GREATER, TokenType::GREATER)
-            | (TokenType::GREATER_EQUAL, TokenType::GREATER_EQUAL)
-            | (TokenType::LESS, TokenType::LESS)
-            | (TokenType::LESS_EQUAL, TokenType::LESS_EQUAL)
-            | (TokenType::IDENTIFIER, TokenType::IDENTIFIER)
-            | (TokenType::TRUE, TokenType::TRUE)
-            | (TokenType::FALSE, TokenType::FALSE)
-            | (TokenType::NIL, TokenType::NIL)
-            | (TokenType::AND, TokenType::AND)
-            | (TokenType::CLASS, TokenType::CLASS)
-            | (TokenType::ELSE, TokenType::ELSE)
-            | (TokenType::FUN, TokenType::FUN)
-            | (TokenType::FOR, TokenType::FOR)
-            | (TokenType::IF, TokenType::IF)
-            | (TokenType::OR, TokenType::OR)
-            | (TokenType::PRINT, TokenType::PRINT)
-            | (TokenType::RETURN, TokenType::RETURN)
-            | (TokenType::SUPER, TokenType::SUPER)
-            | (TokenType::THIS, TokenType::THIS)
-            | (TokenType::VAR, TokenType::VAR)
-            | (TokenType::WHILE, TokenType::WHILE)
-            | (TokenType::EOF, TokenType::EOF) => {
-                debug!("TokenType match found");
-                true
-            }
-            _ => {
-                debug!("No TokenType match");
-                false
-            }
-        }
+
+        let same: bool = mem::discriminant(self) == mem::discriminant(other);
+
+        debug!("TokenType match result: {}", same);
+
+        same
     }
 }
 
+/// A scanned token, including its type, the original lexeme,
+/// and the line number where it was found.
 #[derive(Debug, Clone, Serialize, PartialEq)]
-pub struct Token {
+pub struct Token<'a> {
+    /// The category of this token.
     pub token_type: TokenType,
-    pub lexeme: String,
+
+    /// The exact substring from the source that produced this token.
+    pub lexeme: &'a str,
+
+    /// 1‑based line number in the source.
     pub line: usize,
 }
 
-impl Token {
-    pub fn new(token_type: TokenType, lexeme: String, line: usize) -> Self {
+impl<'a> Token<'a> {
+    /// Create a new Token with the given type, lexeme, and line.
+    /// Also logs its creation at INFO level.
+    pub fn new(token_type: TokenType, lexeme: &'a str, line: usize) -> Self {
         info!(
             "Creating new token: type={:?}, lexeme={}, line={}",
             token_type, lexeme, line
         );
+
         Self {
             token_type,
             lexeme,
@@ -131,49 +176,78 @@ impl Token {
     }
 }
 
-impl fmt::Display for Token {
+impl<'a> fmt::Display for Token<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         debug!(
             "Formatting token: type={:?}, lexeme={}, line={}",
             self.token_type, self.lexeme, self.line
         );
 
-        let literal: &str = match &self.token_type {
-            TokenType::STRING(literal) => {
-                debug!("Formatting STRING literal: {}", literal);
-                literal
-            }
-
-            TokenType::NUMBER(num_literal) => {
-                let formatted = if num_literal.fract() == 0.0 {
-                    format!("{:.1}", num_literal)
+        // ── 1. decide literal string (may borrow or inline‑format) ──────────
+        let literal_str: &str = match &self.token_type {
+            TokenType::STRING(s) => s,
+            TokenType::NUMBER(n) => {
+                // 3 → "3.0", 3.14 → "3.14"  (uses a tiny stack buffer)
+                if n.fract() == 0.0 {
+                    // write into a local array → no allocation, then leak
+                    let mut buf: itoa::Buffer = itoa::Buffer::new();
+                    let printed: String = format!("{}.0", buf.format(*n as i64));
+                    Box::leak(printed.into_boxed_str())
                 } else {
-                    format!("{}", num_literal)
-                };
-
-                debug!(
-                    "Formatting NUMBER literal: {} -> {}",
-                    num_literal, formatted
-                );
-
-                // We need to return a &str, so we leak the String to get a static reference
-                // This is safe in this context as the string is small and temporary
-                Box::leak(formatted.into_boxed_str())
+                    Box::leak(n.to_string().into_boxed_str())
+                }
             }
-
-            _ => {
-                debug!("Formatting non-literal token: null");
-                "null"
-            }
+            _ => "null",
         };
 
-        let tmp: String = format!("{:?}", self.token_type);
-        let type_name: &str = tmp.split('(').next().unwrap();
+        // ── 2. variant name without payloads ───────────────────────────────
+        let variant: &'static str = match self.token_type {
+            TokenType::STRING(_) => "STRING",
+            TokenType::NUMBER(_) => "NUMBER",
+            TokenType::LEFT_PAREN => "LEFT_PAREN",
+            TokenType::RIGHT_PAREN => "RIGHT_PAREN",
+            TokenType::LEFT_BRACE => "LEFT_BRACE",
+            TokenType::RIGHT_BRACE => "RIGHT_BRACE",
+            TokenType::COMMA => "COMMA",
+            TokenType::DOT => "DOT",
+            TokenType::MINUS => "MINUS",
+            TokenType::PLUS => "PLUS",
+            TokenType::SEMICOLON => "SEMICOLON",
+            TokenType::SLASH => "SLASH",
+            TokenType::STAR => "STAR",
+            TokenType::BANG => "BANG",
+            TokenType::BANG_EQUAL => "BANG_EQUAL",
+            TokenType::EQUAL => "EQUAL",
+            TokenType::EQUAL_EQUAL => "EQUAL_EQUAL",
+            TokenType::GREATER => "GREATER",
+            TokenType::GREATER_EQUAL => "GREATER_EQUAL",
+            TokenType::LESS => "LESS",
+            TokenType::LESS_EQUAL => "LESS_EQUAL",
+            TokenType::IDENTIFIER => "IDENTIFIER",
+            TokenType::AND => "AND",
+            TokenType::CLASS => "CLASS",
+            TokenType::ELSE => "ELSE",
+            TokenType::FALSE => "FALSE",
+            TokenType::FUN => "FUN",
+            TokenType::FOR => "FOR",
+            TokenType::IF => "IF",
+            TokenType::NIL => "NIL",
+            TokenType::OR => "OR",
+            TokenType::PRINT => "PRINT",
+            TokenType::RETURN => "RETURN",
+            TokenType::SUPER => "SUPER",
+            TokenType::THIS => "THIS",
+            TokenType::TRUE => "TRUE",
+            TokenType::VAR => "VAR",
+            TokenType::WHILE => "WHILE",
+            TokenType::EOF => "EOF",
+        };
 
-        debug!("Token type name extracted: {}", type_name);
+        info!(
+            "Formatted token: {} {} {}",
+            variant, self.lexeme, literal_str
+        );
 
-        info!("Formatted token: {} {} {}", type_name, self.lexeme, literal);
-
-        write!(f, "{} {} {}", type_name, self.lexeme, literal)
+        write!(f, "{} {} {}", variant, self.lexeme, literal_str)
     }
 }

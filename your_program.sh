@@ -1,24 +1,25 @@
 #!/bin/sh
 #
-# Use this script to run your program LOCALLY.
-#
-# Note: Changing this script WILL NOT affect how CodeCrafters runs your program.
-#
-# Learn more: https://codecrafters.io/program-interface
+# Local “runner” wrapper for your Lox interpreter.
+# Builds once, quietly, then just dispatches to the binary.
 
-set -e # Exit early if any commands fail
+set -e
 
-# Copied from .codecrafters/compile.sh
-#
-# - Edit this to change how your program compiles locally
-# - Edit .codecrafters/compile.sh to change how your program compiles remotely
-(
-  cd "$(dirname "$0")" # Ensure compile steps are run within the repository directory
-  cargo build --release --target-dir=/tmp/codecrafters-build-interpreter-rust --manifest-path Cargo.toml
-)
+# Where we build
+BUILD_DIR=/tmp/codecrafters-build-interpreter-rust
+BIN="$BUILD_DIR/release/codecrafters-interpreter"
 
-# Copied from .codecrafters/run.sh
-#
-# - Edit this to change how your program runs locally
-# - Edit .codecrafters/run.sh to change how your program runs remotely
-exec /tmp/codecrafters-build-interpreter-rust/release/codecrafters-interpreter "$@"
+# 1) If the binary is missing (first run), build in release, but send all build logs to /dev/null
+if [ ! -x "$BIN" ]; then
+  (
+    cd "$(dirname "$0")"
+    cargo build --release \
+      --target-dir="$BUILD_DIR" \
+      --manifest-path Cargo.toml \
+      > /dev/null 2>&1
+  )
+fi
+
+# 2) Now run the interpreter with the exact args you passed in:
+#    e.g. ./your_program.sh tokenize test.lox
+exec "$BIN" "$@"

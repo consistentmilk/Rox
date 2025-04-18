@@ -11,3 +11,9 @@ target/
 *.pdb
 
 app.log
+
+script.py
+run_local_tests.py
+program.sh
+extracted_tests/
+.mypy_cache

@@ -1,532 +1,741 @@
+//! Tree‑walking interpreter
+//!
+//! This module is entirely *runtime* oriented – it consumes the fully‑resolved
+//! AST produced by the `parser`/`resolver` pipeline and executes the program in
+//! a dynamically‑typed environment.
+//!
+//! # Architectural overview
+//! 1. [`Interpreter`] maintains the *current* lexical [`Environment`], a stack
+//!    of call frames (implicit in `Environment` chains), and a `locals` map
+//!    filled in by the resolver for O(1) variable lookup.
+//! 2. Each [`Stmt`]/[`Expr`] node is evaluated through `execute` / `evaluate`.
+//!    Control‑flow constructs (loops, `return`) are implemented via the
+//!    [`Control`] enum which is threaded up the call stack.
+//! 3. Functions are first‑class – *userdefined* (`LoxFunction`) and *native*
+//!    (`NativeFunction`) values share a common [`Value`] representation and the
+//!    same call site in `Expr::Call`.
+//!
+//! ## Concurrency
+//! The interpreter is **single‑threaded** by design; interior mutability is
+//! required only for environments captured by closures (`Rc<RefCell<_>>`).  No
+//! public APIs expose mutable references that can be aliased across threads.
+//!
+
+use crate::error::{LoxError, Result};
+use crate::parser::{Expr, LiteralValue, Stmt};
+use crate::token::{Token, TokenType};
+use log::{debug, info};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
-use std::time::{SystemTime, SystemTimeError, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
-use log::{debug, info};
-use thiserror::Error; // for custom errors
-
-use crate::environment::Environment;
-use crate::expr::Expr;
-use crate::stmt::Stmt;
-use crate::token::{Token, TokenType};
-use crate::value::Value;
-
-#[derive(Error, Debug)]
-pub enum InterpretError {
-    #[error("Runtime error: {0}")]
-    RuntimeError(String),
-
-    #[error("Return signal with value: {0}")]
-    ReturnSignal(Value),
+/// How a resolved variable should be looked up at runtime.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Resolution {
+    /// A local binding at `depth` environments out.
+    Local(usize),
+    /// A truly global binding.
+    Global,
 }
 
-/// Convenient alias for interpreter results.
-pub type IResult<T> = Result<T, InterpretError>;
+// ─────────────────────────────────────────────────────────────────────────────
+// Control‑flow plumbing
+// ─────────────────────────────────────────────────────────────────────────────
 
-pub struct Interpreter {
-    environment: Rc<RefCell<Environment>>,
-    functions: HashMap<String, Stmt>,
+/// Internal marker to thread `return` through nested `execute` calls
+/// without panicking or using `Result` errors.
+#[derive(Debug)]
+enum Control<'a> {
+    /// Normal flow: keep executing subsequent statements.
+    Normal,
+    /// A `return` was encountered, carrying its value.
+    Return(Value<'a>),
 }
 
-impl Interpreter {
-    /// Creates a new Interpreter and defines native functions such as `clock`.
-    pub fn new() -> Self {
-        info!("Initializing Interpreter");
+// ─────────────────────────────────────────────────────────────────────────────
+// Runtime values
+// ─────────────────────────────────────────────────────────────────────────────
 
-        let environment = Rc::new(RefCell::new(Environment::new()));
+/// Dynamically‑typed Lox value.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Value<'a> {
+    Nil,
+    Boolean(bool),
+    Number(f64),
+    Str(String),
+    Function(LoxFunction<'a>),
+    NativeFunction(NativeFunction<'a>),
+}
 
-        debug!("Defining native function 'clock'");
+impl<'a> std::fmt::Display for Value<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Value::Nil => write!(f, "nil"),
 
-        environment.borrow_mut().define(
-            "clock",
-            Value::NativeFunction {
-                name: "clock".to_string(),
-                arity: 0,
-                func: |_args: &[Value]| {
-                    debug!("Calling native function 'clock'");
-                    let timestamp: f64 = SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .map_err(|e: SystemTimeError| format!("Clock error: {}", e))?
-                        .as_secs_f64();
-                    info!("Native function 'clock' returned: {}", timestamp);
-                    Ok(Value::Number(timestamp))
-                },
-            },
+            Value::Boolean(b) => write!(f, "{}", b),
+
+            Value::Number(n) => write!(f, "{}", n),
+
+            Value::Str(s) => write!(f, "{}", s),
+
+            Value::Function(fun) => write!(f, "<fn {}>", fun.name),
+
+            Value::NativeFunction(nf) => write!(f, "<native fn {}>", nf.name),
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Callables
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// A built‑in Lox function backed by a Rust function pointer.
+#[derive(Clone, Debug, PartialEq)]
+pub struct NativeFunction<'a> {
+    pub name: String,
+    pub arity: usize,
+    pub func: fn(Vec<Value<'a>>) -> Result<Value<'a>>,
+}
+
+/// A user‑defined Lox function (closure).
+#[derive(Clone, Debug, PartialEq)]
+pub struct LoxFunction<'a> {
+    pub name: String,
+    pub params: Vec<String>,
+    pub body: &'a [Stmt<'a>],
+    pub closure: Rc<RefCell<Environment<'a>>>,
+}
+
+impl<'a> LoxFunction<'a> {
+    /// How many parameters this function expects.
+    #[inline]
+    pub fn arity(&self) -> usize {
+        self.params.len()
+    }
+
+    /// Call this function under `interp` with the given `args`.
+    ///
+    /// Temporarily swaps `interp.env` to a fresh child of `self.closure`,
+    /// binds parameters, runs the body (early‑return supported), then
+    /// restores the previous environment.
+    pub fn call(&self, interp: &mut Interpreter<'a>, args: Vec<Value<'a>>) -> Result<Value<'a>> {
+        debug!(
+            "Calling user function '{}' ({} args)",
+            self.name,
+            args.len()
         );
 
-        Self {
-            environment,
-            functions: HashMap::new(),
+        // 1. Create a new frame extending the closure:
+        let child_env: Environment<'_> = Environment::with_enclosing(Rc::clone(&self.closure));
+        let rc_child: Rc<RefCell<Environment<'_>>> = Rc::new(RefCell::new(child_env));
+
+        // 2. Bind parameters in that frame:
+        {
+            let mut frame: std::cell::RefMut<'_, Environment<'_>> = rc_child.borrow_mut();
+            for (param, arg) in self.params.iter().zip(args.into_iter()) {
+                frame.define(param, arg);
+            }
+        }
+
+        // 3. Swap into interpreter:
+        let prev_env: Rc<RefCell<Environment<'a>>> = Rc::clone(&interp.env);
+        interp.env = Rc::clone(&rc_child);
+
+        // 4. Execute the body, catching any early return:
+        let mut retval: Value<'_> = Value::Nil;
+
+        for stmt in self.body {
+            match interp.execute(stmt)? {
+                Control::Normal => {}
+
+                Control::Return(v) => {
+                    retval = v;
+
+                    break;
+                }
+            }
+        }
+
+        // 5. Restore the previous environment:
+        interp.env = prev_env;
+
+        Ok(retval)
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Lexical Environment
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// A single scope’s variable map, linked to an optional enclosing scope.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Environment<'a> {
+    values: HashMap<String, Value<'a>>,
+    enclosing: Option<Rc<RefCell<Environment<'a>>>>,
+}
+
+impl<'a> Environment<'a> {
+    /// Create the *global* (root) environment.
+    pub fn new() -> Self {
+        Environment {
+            values: HashMap::new(),
+            enclosing: None,
         }
     }
 
-    /// Interprets a list of statements (a "program").
-    pub fn interpret(&mut self, statements: &[Stmt]) -> IResult<()> {
-        debug!("Interpreting {} statements", statements.len());
-        for stmt in statements {
-            debug!("Executing statement: {:?}", stmt);
-            self.execute(stmt)?;
+    /// Create a child environment rooted at `parent`.
+    pub fn with_enclosing(parent: Rc<RefCell<Environment<'a>>>) -> Self {
+        Environment {
+            values: HashMap::new(),
+            enclosing: Some(parent),
         }
-        info!("Interpretation completed successfully");
+    }
+
+    /// Define or shadow a variable in the current scope.
+    pub fn define(&mut self, name: &str, val: Value<'a>) {
+        self.values.insert(name.to_string(), val);
+    }
+
+    /// Lookup a variable, climbing the chain of enclosing scopes.
+    pub fn get(&self, name: &str) -> Result<Value<'a>> {
+        if let Some(v) = self.values.get(name) {
+            Ok(v.clone())
+        } else if let Some(parent) = &self.enclosing {
+            parent.borrow().get(name)
+        } else {
+            Err(LoxError::Runtime(format!("Undefined variable '{}'.", name)))
+        }
+    }
+
+    /// Assign to an existing variable, climbing scopes until found.
+    pub fn assign(&mut self, name: &str, val: Value<'a>) -> Result<()> {
+        if self.values.contains_key(name) {
+            self.values.insert(name.to_string(), val);
+            Ok(())
+        } else if let Some(parent) = &self.enclosing {
+            parent.borrow_mut().assign(name, val)
+        } else {
+            Err(LoxError::Runtime(format!("Undefined variable '{}'.", name)))
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Interpreter
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// The tree‑walking interpreter.
+///
+/// - `globals`: the root scope (preloaded with `clock`).
+/// - `env`: the current innermost environment.
+/// - `locals`: maps each `Expr` pointer to its `Resolution` (set by resolver).
+#[allow(unused)]
+pub struct Interpreter<'a> {
+    globals: Rc<RefCell<Environment<'a>>>,
+    env: Rc<RefCell<Environment<'a>>>,
+    locals: HashMap<*const Expr<'a>, Resolution>,
+}
+
+impl<'a> Interpreter<'a> {
+    /// Create a new interpreter, initializing the global scope.
+    pub fn new() -> Self {
+        info!("Interpreter instantiated");
+        let globals = Rc::new(RefCell::new(Environment::new()));
+        {
+            let mut g = globals.borrow_mut();
+            // Register clock(): → seconds since UNIX_EPOCH
+            g.define(
+                "clock",
+                Value::NativeFunction(NativeFunction {
+                    name: "clock".into(),
+                    arity: 0,
+                    func: |_args: Vec<Value<'_>>| {
+                        let secs: f64 = SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .unwrap()
+                            .as_secs_f64();
+
+                        Ok(Value::Number(secs))
+                    },
+                }),
+            );
+        }
+
+        Interpreter {
+            globals: Rc::clone(&globals),
+            env: globals,
+            locals: HashMap::new(),
+        }
+    }
+
+    /// Called by the *resolver* when it finds an Expr in a *local* scope.
+    #[inline]
+    pub fn note_local(&mut self, expr: &Expr<'a>, depth: usize) {
+        self.locals
+            .insert(expr as *const _, Resolution::Local(depth));
+    }
+
+    /// Called by the *resolver* when it finds an Expr *not* in any local scope.
+    #[inline]
+    pub fn note_global(&mut self, expr: &Expr<'a>) {
+        self.locals.insert(expr as *const _, Resolution::Global);
+    }
+
+    /// Execute a sequence of statements (a full program).
+    pub fn interpret(&mut self, stmts: &'a [Stmt<'a>]) -> Result<()> {
+        info!("Interpreting {} statement(s)", stmts.len());
+
+        for stmt in stmts {
+            // top‑level `return`s are ignored
+            let _ = self.execute(stmt)?;
+        }
+
         Ok(())
     }
 
-    /// Executes a single statement.
-    pub fn execute(&mut self, stmt: &Stmt) -> IResult<()> {
-        match stmt {
-            Stmt::Function(name, parameters, _body) => {
-                debug!("Defining function '{}'", name.lexeme);
-                // When defining a function, capture the current environment as the closure.
-                let function_value = Value::Function {
-                    name: name.lexeme.to_string(),
-                    arity: parameters.len(),
-                    closure: self.environment.clone(),
-                };
-                self.functions.insert(name.lexeme.to_string(), stmt.clone());
-                self.environment
-                    .borrow_mut()
-                    .define(&name.lexeme, function_value);
-                info!(
-                    "Function '{}' defined with {} parameters",
-                    name.lexeme,
-                    parameters.len()
-                );
-                Ok(())
+    // ─────────────────────────────────────────────────────────────────────────
+    // Statement execution
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Execute one statement, returning whether it was a `return`.
+    fn execute(&mut self, stmt: &'a Stmt<'a>) -> Result<Control<'a>> {
+        debug!("Execute stmt: {:?}", stmt);
+        let ctrl = match stmt {
+            // Expression statement: evaluate & drop
+            Stmt::Expression(e) => {
+                self.evaluate(e)?;
+                Control::Normal
             }
 
-            Stmt::Expression(expr) => {
-                debug!("Evaluating expression statement");
-                let _ = self.evaluate(expr)?;
-                info!("Expression statement executed");
-                Ok(())
+            // Print statement
+            Stmt::Print(e) => {
+                let v = self.evaluate(e)?;
+                println!("{}", v);
+                Control::Normal
             }
 
-            Stmt::Print(expr) => {
-                debug!("Evaluating print statement");
-                let value = self.evaluate(expr)?;
-                println!("{}", value);
-                info!("Printed value: {}", value);
-                Ok(())
-            }
-
-            Stmt::Var(name, initializer) => {
-                debug!("Defining variable '{}'", name.lexeme);
-                let value = if let Some(expr) = initializer {
-                    let val = self.evaluate(expr)?;
-                    debug!("Initializer evaluated to: {}", val);
-                    val
-                } else {
-                    debug!("No initializer, using Nil");
-                    Value::Nil
-                };
-                self.environment
-                    .borrow_mut()
-                    .define(&name.lexeme, value.clone());
-                info!("Variable '{}' defined with value: {}", name.lexeme, value);
-                Ok(())
-            }
-
-            Stmt::Assign(name, expr) => {
-                debug!("Assigning to variable '{}'", name.lexeme);
-                let value = self.evaluate(expr)?;
-                self.environment
-                    .borrow_mut()
-                    .assign(&name.lexeme, value.clone(), name.line)
-                    .map_err(InterpretError::RuntimeError)?;
-                info!("Assigned value {} to '{}'", value, name.lexeme);
-                Ok(())
-            }
-
-            Stmt::Block(statements, _line) => {
-                debug!("Entering block with {} statements", statements.len());
-                let previous = self.environment.clone();
-                self.environment = Rc::new(RefCell::new(Environment::with_enclosing(previous)));
-                for stmt in statements {
-                    self.execute(stmt)?;
-                }
-                // Restore old environment.
-                let tmp = self
-                    .environment
-                    .borrow()
-                    .enclosing
+            // Variable declaration
+            Stmt::Var { name, initializer } => {
+                let val = initializer
                     .as_ref()
-                    .expect("No enclosing environment?")
-                    .clone();
-                self.environment = tmp;
-                info!("Exited block");
-                Ok(())
+                    .map(|e| self.evaluate(e))
+                    .transpose()? // propagate error if any
+                    .unwrap_or(Value::Nil);
+                self.env.borrow_mut().define(name.lexeme, val);
+                Control::Normal
             }
 
-            Stmt::If(condition, then_branch, else_branch) => {
-                debug!("Evaluating if condition");
-                let cond_value = self.evaluate(condition)?;
-                if is_truthy(&cond_value) {
-                    debug!("Condition is truthy; executing then branch");
-                    self.execute(then_branch)?;
-                } else if let Some(else_stmt) = else_branch {
-                    debug!("Condition is falsy; executing else branch");
-                    self.execute(else_stmt)?;
+            // Block `{ ... }`: swap in a new child environment
+            Stmt::Block(stmts) => {
+                let child = Environment::with_enclosing(Rc::clone(&self.env));
+                self.execute_block(stmts, child)?
+            }
+
+            // If statement
+            Stmt::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                let c: Value<'a> = self.evaluate(condition)?;
+                if self.is_truthy(&c) {
+                    self.execute(then_branch)?
+                } else if let Some(eb) = else_branch {
+                    self.execute(eb)?
+                } else {
+                    Control::Normal
                 }
-                info!("If statement executed");
-                Ok(())
             }
 
-            Stmt::While(condition, body) => {
-                debug!("Entering while loop");
-                while is_truthy(&self.evaluate(condition)?) {
-                    debug!("While condition is truthy; executing body");
-                    self.execute(body)?;
+            // While loop
+            Stmt::While { condition, body } => {
+                while {
+                    let c: Value<'a> = self.evaluate(condition)?;
+                    self.is_truthy(&c)
+                } {
+                    if let Control::Return(v) = self.execute(body)? {
+                        return Ok(Control::Return(v));
+                    }
                 }
-                info!("Exited while loop");
-                Ok(())
+                Control::Normal
             }
 
-            Stmt::For(_line, initializer, condition, increment, body) => {
-                debug!("Entering for loop");
-                let previous_env = self.environment.clone();
-                self.environment = Rc::new(RefCell::new(Environment::with_enclosing(previous_env)));
+            // For loop (uses two nested scopes: loop‑scope and per‑iteration scope)
+            Stmt::For {
+                initializer,
+                condition,
+                increment,
+                body,
+            } => {
+                // 1. Create the loop‑scope once
+                let prev: Rc<RefCell<Environment<'a>>> = Rc::clone(&self.env);
+                let loop_env: Rc<RefCell<Environment<'_>>> = Rc::new(RefCell::new(
+                    Environment::with_enclosing(Rc::clone(&self.env)),
+                ));
+                self.env = Rc::clone(&loop_env);
+
+                // 2. Run initializer
                 if let Some(init) = initializer {
-                    debug!("Executing for initializer");
                     self.execute(init)?;
                 }
-                while is_truthy(
-                    &condition
-                        .as_ref()
-                        .map_or(Ok(Value::Bool(true)), |c| self.evaluate(c))?,
-                ) {
-                    debug!("For condition is truthy; executing body");
-                    self.execute(body)?;
-                    if let Some(incr) = increment {
-                        debug!("Evaluating for increment");
-                        self.evaluate(incr)?;
-                    }
-                }
-                let tmp = self
-                    .environment
-                    .borrow()
-                    .enclosing
-                    .as_ref()
-                    .expect("No enclosing environment?")
-                    .clone();
-                self.environment = tmp;
-                info!("Exited for loop");
-                Ok(())
-            }
 
-            Stmt::Return(_keyword, expr) => {
-                debug!("Executing return statement");
-                let value = match expr {
-                    Some(e) => self.evaluate(e)?,
-                    None => Value::Nil,
-                };
-                debug!("Returning value: {}", value);
-                Err(InterpretError::ReturnSignal(value))
-            }
-        }
-    }
-
-    /// Evaluates an expression and returns a Value.
-    pub fn evaluate(&mut self, expr: &Expr) -> IResult<Value> {
-        debug!("Evaluating expression: {:?}", expr);
-        let value = match expr {
-            Expr::Literal(token) => self.evaluate_literal(token)?,
-            Expr::Unary(op, right) => self.evaluate_unary(op, right)?,
-            Expr::Binary(left, op, right) => self.evaluate_binary(left, op, right)?,
-            Expr::Grouping(e) => self.evaluate(e)?,
-            Expr::Variable(t) => self.evaluate_variable(t)?,
-            Expr::Assign(name, rhs_expr) => {
-                let val = self.evaluate(rhs_expr)?;
-                self.environment
-                    .borrow_mut()
-                    .assign(&name.lexeme, val.clone(), name.line)
-                    .map_err(InterpretError::RuntimeError)?;
-                val
-            }
-            Expr::Call(callee_expr, paren_token, arguments) => {
-                debug!("Evaluating function call");
-                let callee_val = self.evaluate(callee_expr)?;
-                let mut arg_values = Vec::with_capacity(arguments.len());
-                for arg in arguments {
-                    let av = self.evaluate(arg)?;
-                    debug!("Evaluated argument => {}", av);
-                    arg_values.push(av);
-                }
-                self.invoke_callable(&callee_val, paren_token, &arg_values)?
-            }
-        };
-        debug!("Expression evaluated to: {}", value);
-        Ok(value)
-    }
-
-    /// Evaluates a literal token.
-    fn evaluate_literal(&self, token: &Token) -> IResult<Value> {
-        debug!("Evaluating literal token: {}", token.lexeme);
-        let val = match &token.token_type {
-            TokenType::NUMBER(n) => Value::Number(*n),
-            TokenType::STRING(s) => Value::String(s.clone()),
-            TokenType::TRUE => Value::Bool(true),
-            TokenType::FALSE => Value::Bool(false),
-            TokenType::NIL => Value::Nil,
-            _ => {
-                let msg = format!("Invalid literal on line {}", token.line);
-                debug!("Error: {}", msg);
-                return Err(InterpretError::RuntimeError(msg));
-            }
-        };
-        Ok(val)
-    }
-
-    /// Evaluates a unary expression.
-    fn evaluate_unary(&mut self, op: &Token, expr: &Expr) -> IResult<Value> {
-        debug!("Evaluating unary operation: {}", op.lexeme);
-        let right_val = self.evaluate(expr)?;
-        let result = match op.token_type {
-            TokenType::MINUS => {
-                if let Value::Number(n) = right_val {
-                    Value::Number(-n)
-                } else {
-                    let msg = format!("Operand must be a number. [line {}]", op.line);
-                    debug!("Error: {}", msg);
-                    return Err(InterpretError::RuntimeError(msg));
-                }
-            }
-            TokenType::BANG => Value::Bool(!is_truthy(&right_val)),
-            _ => {
-                let msg = format!("Invalid unary operator on line {}", op.line);
-                debug!("Error: {}", msg);
-                return Err(InterpretError::RuntimeError(msg));
-            }
-        };
-        Ok(result)
-    }
-
-    /// Evaluates a binary expression.
-    fn evaluate_binary(&mut self, left: &Expr, op: &Token, right: &Expr) -> IResult<Value> {
-        debug!("Evaluating binary operation: {}", op.lexeme);
-        if op.token_type == TokenType::OR {
-            let left_val = self.evaluate(left)?;
-            if is_truthy(&left_val) {
-                return Ok(left_val);
-            }
-            return self.evaluate(right);
-        }
-        if op.token_type == TokenType::AND {
-            let left_val = self.evaluate(left)?;
-            if !is_truthy(&left_val) {
-                return Ok(left_val);
-            }
-            return self.evaluate(right);
-        }
-        let left_val = self.evaluate(left)?;
-        let right_val = self.evaluate(right)?;
-        debug!("Left operand: {}, Right operand: {}", left_val, right_val);
-        match op.token_type {
-            TokenType::PLUS => match (left_val, right_val) {
-                (Value::Number(a), Value::Number(b)) => Ok(Value::Number(a + b)),
-                (Value::String(a), Value::String(b)) => Ok(Value::String(a + &b)),
-                _ => {
-                    let msg = format!(
-                        "Operands must be two numbers or two strings on line {}",
-                        op.line
-                    );
-                    debug!("Error: {}", msg);
-                    Err(InterpretError::RuntimeError(msg))
-                }
-            },
-            TokenType::MINUS => match (left_val, right_val) {
-                (Value::Number(a), Value::Number(b)) => Ok(Value::Number(a - b)),
-                _ => {
-                    let msg = format!("Operands must be numbers on line {}", op.line);
-                    debug!("Error: {}", msg);
-                    Err(InterpretError::RuntimeError(msg))
-                }
-            },
-            TokenType::STAR => match (left_val, right_val) {
-                (Value::Number(a), Value::Number(b)) => Ok(Value::Number(a * b)),
-                _ => {
-                    let msg = format!("Operands must be numbers on line {}", op.line);
-                    Err(InterpretError::RuntimeError(msg))
-                }
-            },
-            TokenType::SLASH => match (left_val, right_val) {
-                (Value::Number(a), Value::Number(b)) => {
-                    if b == 0.0 {
-                        let msg = format!("Division by zero on line {}", op.line);
-                        debug!("Error: {}", msg);
-                        Err(InterpretError::RuntimeError(msg))
+                // 3. Loop
+                while {
+                    if let Some(cond) = condition {
+                        let c = self.evaluate(cond)?;
+                        self.is_truthy(&c)
                     } else {
-                        Ok(Value::Number(a / b))
+                        true
+                    }
+                } {
+                    // 4. Per‑iteration scope
+                    let iter_env: Rc<RefCell<Environment<'_>>> = Rc::new(RefCell::new(
+                        Environment::with_enclosing(Rc::clone(&loop_env)),
+                    ));
+                    self.env = Rc::clone(&iter_env);
+
+                    // 5. Execute body
+                    match self.execute(body)? {
+                        Control::Normal => {}
+                        r @ Control::Return(_) => {
+                            self.env = prev;
+                            return Ok(r);
+                        }
+                    }
+
+                    // 6. Back to loop‑scope for increment
+                    self.env = Rc::clone(&loop_env);
+                    if let Some(inc) = increment {
+                        self.evaluate(inc)?;
                     }
                 }
-                _ => {
-                    let msg = format!("Operands must be numbers on line {}", op.line);
-                    debug!("Error: {}", msg);
-                    Err(InterpretError::RuntimeError(msg))
-                }
-            },
-            TokenType::EQUAL_EQUAL => Ok(Value::Bool(is_equal(&left_val, &right_val))),
-            TokenType::BANG_EQUAL => Ok(Value::Bool(!is_equal(&left_val, &right_val))),
-            TokenType::LESS => match (left_val, right_val) {
-                (Value::Number(a), Value::Number(b)) => Ok(Value::Bool(a < b)),
-                _ => {
-                    let msg = format!("Operands must be numbers on line {}", op.line);
-                    Err(InterpretError::RuntimeError(msg))
-                }
-            },
-            TokenType::LESS_EQUAL => match (left_val, right_val) {
-                (Value::Number(a), Value::Number(b)) => Ok(Value::Bool(a <= b)),
-                _ => {
-                    let msg = format!("Operands must be numbers on line {}", op.line);
-                    Err(InterpretError::RuntimeError(msg))
-                }
-            },
-            TokenType::GREATER => match (left_val, right_val) {
-                (Value::Number(a), Value::Number(b)) => Ok(Value::Bool(a > b)),
-                _ => {
-                    let msg = format!("Operands must be numbers on line {}", op.line);
-                    Err(InterpretError::RuntimeError(msg))
-                }
-            },
-            TokenType::GREATER_EQUAL => match (left_val, right_val) {
-                (Value::Number(a), Value::Number(b)) => Ok(Value::Bool(a >= b)),
-                _ => {
-                    let msg = format!("Operands must be numbers on line {}", op.line);
-                    Err(InterpretError::RuntimeError(msg))
-                }
-            },
-            _ => {
-                let msg = format!("Invalid binary operator on line {}", op.line);
-                debug!("Error: {}", msg);
-                Err(InterpretError::RuntimeError(msg))
-            }
-        }
-    }
 
-    /// Evaluates a variable.
-    fn evaluate_variable(&self, token: &Token) -> IResult<Value> {
-        debug!("Looking up variable '{}'", token.lexeme);
-        let val = self
-            .environment
-            .borrow()
-            .get(&token.lexeme, token.line)
-            .map_err(InterpretError::RuntimeError)?;
-        debug!("Variable '{}' evaluated to: {}", token.lexeme, val);
-        Ok(val)
-    }
-
-    /// Invokes a callable (native or user-defined function).
-    fn invoke_callable(
-        &mut self,
-        callee_val: &Value,
-        paren_token: &Token,
-        arg_values: &[Value],
-    ) -> IResult<Value> {
-        match callee_val {
-            Value::NativeFunction { name, arity, func } => {
-                debug!("Calling native function '{}'", name);
-                if arg_values.len() != *arity {
-                    let msg = format!(
-                        "Expected {} arguments but got {} at line {}",
-                        arity,
-                        arg_values.len(),
-                        paren_token.line
-                    );
-                    debug!("Error: {}", msg);
-                    return Err(InterpretError::RuntimeError(msg));
-                }
-                let result = func(arg_values).map_err(InterpretError::RuntimeError)?;
-                info!("Native function '{}' returned: {}", name, result);
-                Ok(result)
+                // 7. Restore
+                self.env = prev;
+                Control::Normal
             }
 
-            // Updated to handle closures:
-            Value::Function {
-                name,
-                arity,
-                closure,
-            } => {
-                debug!("Calling user-defined function '{}'", name);
-                if arg_values.len() != *arity {
-                    let msg = format!(
-                        "Expected {} arguments but got {} at line {}",
-                        arity,
-                        arg_values.len(),
-                        paren_token.line
-                    );
-                    debug!("Error: {}", msg);
-                    return Err(InterpretError::RuntimeError(msg));
-                }
-                let function_stmt: &Stmt = self.functions.get(name).ok_or_else(|| {
-                    let msg = format!("Undefined function '{}' at line {}", name, paren_token.line);
-                    debug!("Error: {}", msg);
-                    InterpretError::RuntimeError(msg)
-                })?;
-                let Stmt::Function(_, params, body) = function_stmt else {
-                    let msg = format!("Invalid function '{}'", name);
-                    debug!("Error: {}", msg);
-                    return Err(InterpretError::RuntimeError(msg));
+            // Function declaration
+            Stmt::Function { name, params, body } => {
+                let fun: LoxFunction<'_> = LoxFunction {
+                    name: name.lexeme.to_string(),
+                    params: params.iter().map(|t| t.lexeme.to_string()).collect(),
+                    body,
+                    closure: Rc::clone(&self.env),
                 };
 
-                // Save the current environment.
-                let saved_env: Rc<RefCell<Environment>> = self.environment.clone();
-                // Instead of using the current environment, use the function’s closure.
-                self.environment =
-                    Rc::new(RefCell::new(Environment::with_enclosing(closure.clone())));
+                self.env
+                    .borrow_mut()
+                    .define(name.lexeme, Value::Function(fun));
+                Control::Normal
+            }
 
-                // Bind parameters.
-                for (param, arg_val) in params.iter().zip(arg_values.iter()) {
-                    debug!("Binding parameter '{}' to {}", param.lexeme, arg_val);
-                    self.environment
-                        .borrow_mut()
-                        .define(&param.lexeme, arg_val.clone());
-                }
+            // Return statement
+            Stmt::Return { value, .. } => {
+                let v: Value<'a> = value
+                    .as_ref()
+                    .map(|e: &Expr| self.evaluate(e))
+                    .transpose()?
+                    .unwrap_or(Value::Nil);
+                return Ok(Control::Return(v));
+            }
+        };
+        Ok(ctrl)
+    }
 
-                debug!("Executing function body");
-                let result = self.execute(&body.clone());
-                // Restore the saved environment.
-                self.environment = saved_env;
+    /// Execute a block in a fresh `new_env`, restoring the old one after.
+    fn execute_block(
+        &mut self,
+        stmts: &'a [Stmt<'a>],
+        new_env: Environment<'a>,
+    ) -> Result<Control<'a>> {
+        let prev: Rc<RefCell<Environment<'a>>> = Rc::clone(&self.env);
+        self.env = Rc::new(RefCell::new(new_env));
 
-                match result {
-                    Ok(()) => {
-                        info!("Function '{}' returned Nil", name);
-                        Ok(Value::Nil)
-                    }
-                    Err(InterpretError::ReturnSignal(val)) => {
-                        info!("Function '{}' returned: {}", name, val);
-                        Ok(val)
-                    }
-                    Err(InterpretError::RuntimeError(e)) => Err(InterpretError::RuntimeError(e)),
+        let mut outcome: Control<'_> = Control::Normal;
+
+        for stmt in stmts {
+            let c: Control<'a> = self.execute(stmt)?;
+
+            if let Control::Return(_) = c {
+                outcome = c;
+
+                break;
+            }
+        }
+
+        self.env = prev;
+        Ok(outcome)
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Expression evaluation
+    // ─────────────────────────────────────────────────────────────────────────
+
+    fn evaluate(&mut self, expr: &Expr<'a>) -> Result<Value<'a>> {
+        debug!("Evaluate expr: {:?}", expr);
+
+        match expr {
+            // Literal constants
+            Expr::Literal(lit) => match lit {
+                LiteralValue::Number(n) => Ok(Value::Number(*n)),
+                LiteralValue::Str(s) => Ok(Value::Str(s.clone())),
+                LiteralValue::True => Ok(Value::Boolean(true)),
+                LiteralValue::False => Ok(Value::Boolean(false)),
+                LiteralValue::Nil => Ok(Value::Nil),
+            },
+
+            // Grouping: just unwrap
+            Expr::Grouping(e) => self.evaluate(e),
+
+            // Unary operators: `-` and `!`
+            Expr::Unary { operator, right } => {
+                let rv = self.evaluate(right)?;
+                match operator.token_type {
+                    TokenType::MINUS => self.negate_number(operator.line, rv),
+                    TokenType::BANG => Ok(Value::Boolean(!self.is_truthy(&rv))),
+                    _ => unreachable!(),
                 }
             }
 
-            _ => {
-                let msg = format!("Can only call functions at line {}", paren_token.line);
-                debug!("Error: {}", msg);
-                Err(InterpretError::RuntimeError(msg))
+            // Binary arithmetic/comparison
+            Expr::Binary {
+                left,
+                operator,
+                right,
+            } => {
+                let lv: Value<'a> = self.evaluate(left)?;
+                let rv: Value<'a> = self.evaluate(right)?;
+
+                match operator.token_type {
+                    TokenType::PLUS => self.add_values(operator.line, lv, rv),
+
+                    TokenType::MINUS => self.arith(operator.line, lv, rv, |a, b| a - b),
+
+                    TokenType::STAR => self.arith(operator.line, lv, rv, |a, b| a * b),
+
+                    TokenType::SLASH => self.arith(operator.line, lv, rv, |a, b| a / b),
+
+                    TokenType::GREATER => self.compare(operator.line, lv, rv, |a, b| a > b),
+
+                    TokenType::GREATER_EQUAL => self.compare(operator.line, lv, rv, |a, b| a >= b),
+
+                    TokenType::LESS => self.compare(operator.line, lv, rv, |a, b| a < b),
+
+                    TokenType::LESS_EQUAL => self.compare(operator.line, lv, rv, |a, b| a <= b),
+
+                    TokenType::EQUAL_EQUAL => Ok(Value::Boolean(lv == rv)),
+
+                    TokenType::BANG_EQUAL => Ok(Value::Boolean(lv != rv)),
+
+                    _ => unreachable!(),
+                }
+            }
+
+            // Logical `and` / `or` with short‑circuit
+            Expr::Logical {
+                left,
+                operator,
+                right,
+            } => {
+                let lv: Value<'a> = self.evaluate(left)?;
+
+                if operator.token_type == TokenType::OR {
+                    if self.is_truthy(&lv) {
+                        return Ok(lv);
+                    }
+                } else if !self.is_truthy(&lv) {
+                    return Ok(lv);
+                }
+
+                self.evaluate(right)
+            }
+
+            // Variable access
+            Expr::Variable(tok) => self.look_up_variable(tok, expr),
+
+            // Assignment expression
+            Expr::Assign { name, value } => {
+                let vv = self.evaluate(value)?;
+                self.assign_variable(name, &vv, expr)?;
+                Ok(vv)
+            }
+
+            // Function or native call
+            Expr::Call {
+                callee,
+                paren,
+                arguments,
+            } => {
+                let callee_val: Value<'a> = self.evaluate(callee)?;
+                let mut args: Vec<Value<'a>> = Vec::with_capacity(arguments.len());
+
+                for arg in arguments {
+                    args.push(self.evaluate(arg)?);
+                }
+
+                match callee_val {
+                    Value::NativeFunction(NativeFunction { arity, func, .. }) => {
+                        if args.len() != arity {
+                            return Err(LoxError::Runtime(format!(
+                                "Expected {} args but got {} (line {}).",
+                                arity,
+                                args.len(),
+                                paren.line
+                            )));
+                        }
+
+                        func(args)
+                    }
+                    Value::Function(fun) => {
+                        if args.len() != fun.arity() {
+                            return Err(LoxError::Runtime(format!(
+                                "Expected {} args but got {} (line {}).",
+                                fun.arity(),
+                                args.len(),
+                                paren.line
+                            )));
+                        }
+
+                        fun.call(self, args)
+                    }
+
+                    _ => Err(LoxError::Runtime(format!(
+                        "Can only call functions (line {}).",
+                        paren.line
+                    ))),
+                }
             }
         }
     }
-}
 
-fn is_truthy(value: &Value) -> bool {
-    debug!("Checking truthiness of: {}", value);
-    let result = match value {
-        Value::Nil => false,
-        Value::Bool(b) => *b,
-        _ => true,
-    };
-    debug!("Truthiness result: {}", result);
-    result
-}
+    // ─────────────────────────────────────────────────────────────────────────
+    // Variable lookup & assignment
+    // ─────────────────────────────────────────────────────────────────────────
+    /// Look up a variable, *honoring* the resolver’s marking.
+    fn look_up_variable(&self, name: &Token, expr: &Expr<'a>) -> Result<Value<'a>> {
+        match self.locals.get(&(expr as *const _)) {
+            // 1) A local binding at `depth` frames up
+            Some(Resolution::Local(d)) => self.get_at(*d, name.lexeme),
 
-fn is_equal(left: &Value, right: &Value) -> bool {
-    debug!("Checking equality: {} == {}", left, right);
-    match (left, right) {
-        (Value::Number(a), Value::Number(b)) => a == b,
-        (Value::String(a), Value::String(b)) => a == b,
-        (Value::Bool(a), Value::Bool(b)) => a == b,
-        (Value::Nil, Value::Nil) => true,
-        _ => false,
+            // 2) A truly global binding → always read from `globals`
+            Some(Resolution::Global) => {
+                debug!("Variable '{}' forced to GLOBAL lookup", name.lexeme);
+                self.globals.borrow().get(name.lexeme)
+            }
+
+            // 3) No resolver entry (e.g. top‑level var) → default to current env
+            None => {
+                debug!("Variable '{}' dynamic lookup", name.lexeme);
+                self.env.borrow().get(name.lexeme)
+            }
+        }
+    }
+
+    /// Similarly for assignment.
+    fn assign_variable(&self, name: &Token, val: &Value<'a>, expr: &Expr<'a>) -> Result<()> {
+        match self.locals.get(&(expr as *const _)) {
+            Some(Resolution::Local(d)) => self.assign_at(*d, name.lexeme, val.clone()),
+
+            Some(Resolution::Global) => {
+                debug!("Assign '{}' forced to GLOBAL", name.lexeme);
+                self.globals.borrow_mut().assign(name.lexeme, val.clone())
+            }
+
+            None => self.env.borrow_mut().assign(name.lexeme, val.clone()),
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Ancestor lookup via lexical distance
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Climb `depth` times through `enclosing` to get the correct
+    /// environment for a local variable.
+    fn ancestor(&self, mut depth: usize) -> Rc<RefCell<Environment<'a>>> {
+        let mut env: Rc<RefCell<Environment<'a>>> = Rc::clone(&self.env);
+
+        while depth > 0 {
+            let parent: Rc<RefCell<Environment<'a>>> =
+                env.borrow().enclosing.as_ref().unwrap().clone();
+            env = parent;
+            depth -= 1;
+        }
+
+        env
+    }
+
+    #[inline]
+    fn get_at(&self, depth: usize, name: &str) -> Result<Value<'a>> {
+        self.ancestor(depth).borrow().get(name)
+    }
+
+    #[inline]
+    fn assign_at(&self, depth: usize, name: &str, val: Value<'a>) -> Result<()> {
+        self.ancestor(depth).borrow_mut().assign(name, val)
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Utility helpers: truthiness & numeric ops
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[inline]
+    fn is_truthy(&self, v: &Value<'a>) -> bool {
+        !matches!(v, Value::Boolean(false) | Value::Nil)
+    }
+
+    fn negate_number(&self, line: usize, v: Value<'a>) -> Result<Value<'a>> {
+        if let Value::Number(n) = v {
+            Ok(Value::Number(-n))
+        } else {
+            Err(LoxError::Runtime(format!(
+                "Operand must be a number (line {}).",
+                line
+            )))
+        }
+    }
+
+    fn arith<F>(&self, line: usize, l: Value<'a>, r: Value<'a>, op: F) -> Result<Value<'a>>
+    where
+        F: FnOnce(f64, f64) -> f64,
+    {
+        match (l, r) {
+            (Value::Number(a), Value::Number(b)) => Ok(Value::Number(op(a, b))),
+
+            _ => Err(LoxError::Runtime(format!(
+                "Operands must be numbers (line {}).",
+                line
+            ))),
+        }
+    }
+
+    fn add_values(&self, line: usize, l: Value<'a>, r: Value<'a>) -> Result<Value<'a>> {
+        match (l, r) {
+            (Value::Number(a), Value::Number(b)) => Ok(Value::Number(a + b)),
+            (Value::Str(mut s), Value::Str(t)) => {
+                s.push_str(&t);
+                Ok(Value::Str(s))
+            }
+
+            _ => Err(LoxError::Runtime(format!(
+                "Operands must be two numbers or two strings (line {}).",
+                line
+            ))),
+        }
+    }
+
+    fn compare<F>(&self, line: usize, l: Value<'a>, r: Value<'a>, cmp: F) -> Result<Value<'a>>
+    where
+        F: FnOnce(f64, f64) -> bool,
+    {
+        match (l, r) {
+            (Value::Number(a), Value::Number(b)) => Ok(Value::Boolean(cmp(a, b))),
+
+            _ => Err(LoxError::Runtime(format!(
+                "Operands must be numbers for comparison (line {}).",
+                line
+            ))),
+        }
     }
 }

@@ -1,177 +1,243 @@
+//! Streaming UTF‑8 lexer for the Crafting‑Interpreters dialect of Lox.
+//!
+//! ### Public API surface
+//! The lexer is an **iterator** over `Result<Token<'a>, LoxError>`.  A typical
+//! usage looks like:
+//!
+//! ```rust
+//! let mut scanner = Scanner::new(source_bytes);
+//! for tok in scanner {
+//!     let tok = tok?;        // <-- ? maps `LoxError` upward
+//!     println!("{tok}");
+//! }
+//! ```
+//!
+//! Because the iterator is [`FusedIterator`] it yields **exactly one** `EOF`
+//! token then terminates with `None`, making it safe to chain with `collect()`
+//! or other iterator adapters.
+
+use crate::error::{LoxError, Result};
+use crate::token::{Token, TokenType};
+use log::{debug, info};
+use memchr::memchr;
+use phf::phf_map;
 use std::iter::FusedIterator;
 
-use log::{debug, info};
-use phf::phf_map;
-
-use crate::token::{Token, TokenType};
+// ─────────────────────────────────────────────────────────────────────────────
+// Static keyword map (compile‑time perfect hash)
+// ─────────────────────────────────────────────────────────────────────────────
 
 static KEYWORDS: phf::Map<&'static [u8], TokenType> = phf_map! {
-    b"and" => TokenType::AND,
-    b"class" => TokenType::CLASS,
-    b"else" => TokenType::ELSE,
-    b"false" => TokenType::FALSE,
-    b"fun" => TokenType::FUN,
-    b"for" => TokenType::FOR,
-    b"if" => TokenType::IF,
-    b"nil" => TokenType::NIL,
-    b"or" => TokenType::OR,
-    b"print" => TokenType::PRINT,
+    b"and"    => TokenType::AND,
+    b"class"  => TokenType::CLASS,
+    b"else"   => TokenType::ELSE,
+    b"false"  => TokenType::FALSE,
+    b"fun"    => TokenType::FUN,
+    b"for"    => TokenType::FOR,
+    b"if"     => TokenType::IF,
+    b"nil"    => TokenType::NIL,
+    b"or"     => TokenType::OR,
+    b"print"  => TokenType::PRINT,
     b"return" => TokenType::RETURN,
-    b"super" => TokenType::SUPER,
-    b"this" => TokenType::THIS,
-    b"true" => TokenType::TRUE,
-    b"var" => TokenType::VAR,
-    b"while" => TokenType::WHILE,
+    b"super"  => TokenType::SUPER,
+    b"this"   => TokenType::THIS,
+    b"true"   => TokenType::TRUE,
+    b"var"    => TokenType::VAR,
+    b"while"  => TokenType::WHILE,
 };
 
-#[derive(Debug, Clone)]
-pub struct Scanner {
-    source: Vec<u8>,
-    start: usize,
-    curr_ptr: usize,
-    line: usize,
-    had_error: bool,
-    pending_token: Option<TokenType>,
+/// A single pass **scanner / lexer** that converts raw UTF‑8 bytes into a
+/// sequence of [`Token`]s.  The lifetime `'a` ties every emitted token’s
+/// `lexeme` slice back to the original source buffer.
+pub struct Scanner<'a> {
+    src: &'a [u8],              // entire source file (memory‑mapped)
+    start: usize,               // index of the *first* byte of the current lexeme
+    curr: usize,                // index *one past* the last byte examined
+    line: usize,                // 1‑based line counter (\n increments)
+    pending: Option<TokenType>, // recognised token kind waiting to be emitted
 }
 
-impl Scanner {
-    pub fn new(buf: Vec<u8>) -> Self {
-        info!("Initializing Scanner with buffer of {} bytes", buf.len());
+impl<'a> Scanner<'a> {
+    /// Create a new lexer over `src`.
+    #[inline]
+    pub fn new(src: &'a [u8]) -> Self {
+        info!("Scanner created over {} bytes", src.len());
+
         Self {
-            source: buf,
+            src,
             start: 0,
-            curr_ptr: 0,
+            curr: 0,
             line: 1,
-            had_error: false,
-            pending_token: None,
+            pending: None,
         }
     }
 
-    #[inline]
-    pub fn len(&self) -> usize {
-        self.source.len()
+    // ───────────────────────────── primitive helpers ────────────────────────
+
+    /// Return the length of the input slice.
+    #[inline(always)]
+    const fn len(&self) -> usize {
+        self.src.len()
     }
 
-    fn scan_token(&mut self) -> Result<(), String> {
-        debug!(
-            "Scanning token at position {}, line {}",
-            self.curr_ptr, self.line
-        );
-        let byte: u8 = self.advance();
-        debug!("Processing byte: '{}'", byte as char);
+    /// Are we at (or past) the end of input?
+    #[inline(always)]
+    fn is_at_end(&self) -> bool {
+        self.curr >= self.len()
+    }
 
-        match byte {
-            b'(' => self.add_token(TokenType::LEFT_PAREN),
+    /// Advance one byte and return it.  *Panics* if called at EOF – higher‑level
+    /// code always guards with [`is_at_end`].
+    #[inline(always)]
+    fn advance(&mut self) -> u8 {
+        let b = self.src[self.curr];
+        self.curr += 1;
+        b
+    }
 
-            b')' => self.add_token(TokenType::RIGHT_PAREN),
+    /// Peek at the current byte without consuming it.  Returns `0` if past EOF
+    /// to avoid branching at call‑site.
+    #[inline(always)]
+    fn peek(&self) -> u8 {
+        if self.is_at_end() {
+            0
+        } else {
+            self.src[self.curr]
+        }
+    }
 
-            b'{' => self.add_token(TokenType::LEFT_BRACE),
+    /// Peek one byte beyond [`peek`].  Safe at EOF.
+    #[inline(always)]
+    fn peek_next(&self) -> u8 {
+        if self.curr + 1 >= self.len() {
+            0
+        } else {
+            self.src[self.curr + 1]
+        }
+    }
 
-            b'}' => self.add_token(TokenType::RIGHT_BRACE),
+    /// Conditionally consume a byte **iff** it matches `expected`.
+    /// Returns `true` on success so callers can branch inline without an else.
+    #[inline(always)]
+    fn match_byte(&mut self, expected: u8) -> bool {
+        if !self.is_at_end() && self.peek() == expected {
+            self.advance();
+            true
+        } else {
+            false
+        }
+    }
 
-            b',' => self.add_token(TokenType::COMMA),
+    // ───────────────────────────── core lexing ─────────────────────────────
 
-            b'.' => self.add_token(TokenType::DOT),
+    /// Scan a *single* token starting at `self.curr`.  If the lexeme produces an
+    /// actual token the kind is stored in `self.pending`.  Whitespace and
+    /// comments are skipped by returning `Ok(())` with `pending = None`.
+    fn scan_token(&mut self) -> Result<()> {
+        let b = self.advance();
 
-            b'-' => self.add_token(TokenType::MINUS),
+        match b {
+            // ── single‑character punctuators ──────────────────────────────
+            b'(' => self.pending = Some(TokenType::LEFT_PAREN),
+            b')' => self.pending = Some(TokenType::RIGHT_PAREN),
+            b'{' => self.pending = Some(TokenType::LEFT_BRACE),
+            b'}' => self.pending = Some(TokenType::RIGHT_BRACE),
+            b',' => self.pending = Some(TokenType::COMMA),
+            b'.' => self.pending = Some(TokenType::DOT),
+            b'-' => self.pending = Some(TokenType::MINUS),
+            b'+' => self.pending = Some(TokenType::PLUS),
+            b';' => self.pending = Some(TokenType::SEMICOLON),
+            b'*' => self.pending = Some(TokenType::STAR),
 
-            b'+' => self.add_token(TokenType::PLUS),
-
-            b';' => self.add_token(TokenType::SEMICOLON),
-
-            b'*' => self.add_token(TokenType::STAR),
-
+            // ── two‑character operators (!=, ==, <=, >=) ─────────────────
             b'!' => {
-                let token_type: TokenType = if self.match_byte(b'=') {
-                    debug!("Matched '!=' -> BANG_EQUAL");
+                let tt = if self.match_byte(b'=') {
                     TokenType::BANG_EQUAL
                 } else {
-                    debug!("Single '!' -> BANG");
                     TokenType::BANG
                 };
-                self.add_token(token_type);
+
+                self.pending = Some(tt);
             }
 
             b'=' => {
-                let token_type: TokenType = if self.match_byte(b'=') {
-                    debug!("Matched '==' -> EQUAL_EQUAL");
+                let tt = if self.match_byte(b'=') {
                     TokenType::EQUAL_EQUAL
                 } else {
-                    debug!("Single '=' -> EQUAL");
                     TokenType::EQUAL
                 };
-                self.add_token(token_type);
+
+                self.pending = Some(tt);
             }
 
             b'<' => {
-                let token_type: TokenType = if self.match_byte(b'=') {
-                    debug!("Matched '<=' -> LESS_EQUAL");
+                let tt = if self.match_byte(b'=') {
                     TokenType::LESS_EQUAL
                 } else {
-                    debug!("Single '<' -> LESS");
                     TokenType::LESS
                 };
-                self.add_token(token_type);
+
+                self.pending = Some(tt);
             }
 
             b'>' => {
-                let token_type: TokenType = if self.match_byte(b'=') {
-                    debug!("Matched '>=' -> GREATER_EQUAL");
+                let tt = if self.match_byte(b'=') {
                     TokenType::GREATER_EQUAL
                 } else {
-                    debug!("Single '>' -> GREATER");
                     TokenType::GREATER
                 };
-                self.add_token(token_type);
+
+                self.pending = Some(tt);
             }
 
+            // ── whitespace / newline ─────────────────────────────────────
             b' ' | b'\r' | b'\t' => {
-                debug!("Skipping whitespace");
+                return Ok(()); // skip insignificants
             }
 
             b'\n' => {
-                debug!("Incrementing line count to {}", self.line + 1);
-                self.line += 1;
+                self.line += 1; // track for diagnostics
+
+                return Ok(());
             }
 
+            // ── comments (// … until newline) ────────────────────────────
             b'/' => {
                 if self.match_byte(b'/') {
-                    debug!("Found comment, skipping until newline");
-                    while self.peek() != b'\n' && !self.is_at_end() {
-                        self.advance();
+                    // Fast‑forward to next newline using `memchr` (≈ 4× faster
+                    // than byte‑by‑byte).  If none found, skip to EOF.
+                    if let Some(pos) = memchr(b'\n', &self.src[self.curr..]) {
+                        self.curr += pos;
+                    } else {
+                        self.curr = self.len();
                     }
-                } else {
-                    debug!("Single '/' -> SLASH");
-                    self.add_token(TokenType::SLASH);
+
+                    return Ok(());
                 }
+
+                self.pending = Some(TokenType::SLASH);
             }
 
+            // ── string literal " … " ─────────────────────────────────––
             b'"' => {
-                debug!("Starting string parsing");
-                self.parse_string()?;
+                return self.parse_string();
             }
 
+            // ── number literal (digit‑leading) ───────────────────────────
             b'0'..=b'9' => {
-                debug!("Starting number parsing");
                 self.parse_number();
             }
 
-            b'a'..=b'z' | b'A'..b'Z' | b'_' => {
-                debug!("Starting identifier parsing");
+            // ── identifiers / keywords (alpha or underscore‑leading) ─────
+            b'a'..=b'z' | b'A'..=b'Z' | b'_' => {
                 self.parse_identifier();
             }
 
+            // ── unexpected character ─────────────────────────────────────
             _ => {
-                debug!(
-                    "Unexpected character '{}' at line {}",
-                    byte as char, self.line
-                );
-
-                self.had_error = true;
-
-                return Err(format!(
-                    "[line {}] Error: Unexpected character: {}",
-                    self.line, byte as char
+                return Err(LoxError::lex(
+                    self.line,
+                    format!("Unexpected character: {}", b as char),
                 ));
             }
         }
@@ -179,214 +245,112 @@ impl Scanner {
         Ok(())
     }
 
-    fn parse_string(&mut self) -> Result<(), String> {
-        debug!("Parsing string literal at line {}", self.line);
+    /// Parse a double‑quoted string literal.
+    ///
+    /// * `self.start` still points to the opening `"`.
+    /// * When we return, `self.curr` points **past** the closing `"`.
+    fn parse_string(&mut self) -> Result<()> {
         while !self.is_at_end() && self.peek() != b'"' {
-            if self.peek() == b'\n' {
-                debug!("Newline in string, incrementing line to {}", self.line + 1);
-                self.line += 1;
+            if self.advance() == b'\n' {
+                self.line += 1; // support multi‑line strings (allowed in Lox)
             }
-            self.advance();
         }
 
         if self.is_at_end() {
-            debug!("Unterminated string at line {}", self.line);
-
-            self.had_error = true;
-
-            return Err(format!("[line {}] Error: Unterminated string.", self.line));
+            return Err(LoxError::lex(self.line, "Unterminated string."));
         }
 
-        self.advance();
+        self.advance(); // consume closing quote
 
-        let parsed_string: String = unsafe {
-            String::from_utf8_unchecked(self.source[self.start + 1..self.curr_ptr - 1].to_vec())
-        };
+        // Slice excluding the surrounding quotes.
+        let slice: &[u8] = &self.src[self.start + 1..self.curr - 1];
 
-        info!("Parsed string literal: {}", parsed_string);
+        // SAFETY: the original source is valid UTF‑8 (guaranteed by caller).
+        let s: &str = unsafe { std::str::from_utf8_unchecked(slice) };
 
-        self.add_token(TokenType::STRING(parsed_string));
+        self.pending = Some(TokenType::STRING(s.to_owned()));
 
         Ok(())
     }
 
+    /// Parse a numeric literal (`123`, `3.14`).  Fractions are optional.
     fn parse_number(&mut self) {
-        debug!("Parsing number starting at position {}", self.start);
-
         while self.peek().is_ascii_digit() {
             self.advance();
         }
 
+        // Optional fractional part.
         if self.peek() == b'.' && self.peek_next().is_ascii_digit() {
-            debug!("Found decimal point in number");
-
-            self.advance();
+            self.advance(); // consume "."
 
             while self.peek().is_ascii_digit() {
                 self.advance();
             }
         }
 
-        let parsed_number: String =
-            unsafe { String::from_utf8_unchecked(self.source[self.start..self.curr_ptr].to_vec()) };
-
-        let number: f64 = parsed_number.parse().unwrap_or(0.0);
-
-        info!("Parsed number: {}", number);
-
-        self.add_token(TokenType::NUMBER(number));
+        let slice: &[u8] = &self.src[self.start..self.curr];
+        let s: &str = unsafe { std::str::from_utf8_unchecked(slice) };
+        let n: f64 = s.parse::<f64>().unwrap_or(0.0); // parse never fails (checked digits)
+        self.pending = Some(TokenType::NUMBER(n));
     }
 
+    /// Parse an identifier and decide if it is a **keyword** or a generic
+    /// `IDENTIFIER` token.
     fn parse_identifier(&mut self) {
-        debug!("Parsing identifier starting at position {}", self.start);
-
-        while self.peek().is_ascii_alphanumeric() || self.peek() == b'_' {
+        while {
+            let c: u8 = self.peek();
+            c.is_ascii_alphanumeric() || c == b'_'
+        } {
             self.advance();
         }
 
-        let text: &str =
-            unsafe { std::str::from_utf8_unchecked(&self.source[self.start..self.curr_ptr]) };
+        let slice: &[u8] = &self.src[self.start..self.curr];
 
-        match KEYWORDS.get(text.as_bytes()) {
-            Some(token_type) => {
-                info!("Parsed keyword: {}", text);
+        let tt: TokenType = KEYWORDS
+            .get(slice)
+            .cloned()
+            .unwrap_or(TokenType::IDENTIFIER);
 
-                self.add_token(token_type.clone());
-            }
-
-            None => {
-                info!("Parsed identifier: {}", text);
-
-                self.add_token(TokenType::IDENTIFIER);
-            }
-        }
-    }
-
-    #[inline]
-    fn add_token(&mut self, token_type: TokenType) {
-        info!("Adding token: {:?}", token_type);
-
-        self.pending_token = Some(token_type);
-    }
-
-    #[inline]
-    fn advance(&mut self) -> u8 {
-        let byte = self.source[self.curr_ptr];
-
-        self.curr_ptr += 1;
-
-        debug!(
-            "Advancing to position {}, byte: '{}'",
-            self.curr_ptr, byte as char
-        );
-
-        byte
-    }
-
-    #[inline]
-    fn match_byte(&mut self, expected: u8) -> bool {
-        if self.is_at_end() || self.source[self.curr_ptr] != expected {
-            debug!("No match for byte '{}'", expected as char);
-
-            false
-        } else {
-            debug!("Matched byte '{}'", expected as char);
-
-            self.curr_ptr += 1;
-
-            true
-        }
-    }
-
-    #[inline]
-    fn peek(&mut self) -> u8 {
-        if self.is_at_end() {
-            debug!("Peek: at end, returning 0");
-
-            0
-        } else {
-            debug!("Peek: byte '{}'", self.source[self.curr_ptr] as char);
-
-            self.source[self.curr_ptr]
-        }
-    }
-
-    #[inline]
-    fn peek_next(&mut self) -> u8 {
-        if self.curr_ptr + 1 >= self.len() {
-            debug!("Peek_next: beyond end, returning 0");
-
-            0
-        } else {
-            debug!(
-                "Peek_next: byte '{}'",
-                self.source[self.curr_ptr + 1] as char
-            );
-
-            self.source[self.curr_ptr + 1]
-        }
-    }
-
-    #[inline]
-    fn is_at_end(&self) -> bool {
-        let at_end = self.curr_ptr >= self.len();
-
-        debug!("Checking is_at_end: {}", at_end);
-
-        at_end
+        self.pending = Some(tt);
     }
 }
 
-impl Iterator for Scanner {
-    type Item = Result<Token, String>;
+// ───────────────────────── Iterator implementation ─────────────────────────
+
+impl<'a> Iterator for Scanner<'a> {
+    type Item = Result<Token<'a>>; // alias = Result<T, LoxError>
 
     fn next(&mut self) -> Option<Self::Item> {
-        debug!("Iterator next called at position {}", self.curr_ptr);
-
-        if self.is_at_end() {
-            if self.curr_ptr == self.len() {
-                self.curr_ptr += 1;
-
-                info!("Reached EOF at line {}", self.line);
-
-                return Some(Ok(Token::new(TokenType::EOF, "".to_string(), self.line)));
+        // Loop until we either emit a token, hit EOF, or see an error.
+        while self.curr <= self.len() {
+            // 1. EOF guard – emit exactly one EOF then terminate.
+            if self.curr == self.len() {
+                self.curr += 1; // ensure fused semantics
+                return Some(Ok(Token::new(TokenType::EOF, "", self.line)));
             }
 
-            debug!("Iterator fully consumed");
+            // 2. Reset per‑token state.
+            self.start = self.curr;
+            self.pending = None;
 
-            return None;
+            // 3. Attempt to scan a token.
+            if let Err(e) = self.scan_token() {
+                return Some(Err(e));
+            }
+
+            // 4. If a real token was recognised, build and return it.
+            if let Some(tt) = self.pending.take() {
+                let slice: &[u8] = &self.src[self.start..self.curr];
+                let lex: &str = unsafe { std::str::from_utf8_unchecked(slice) };
+                debug!("Scanned token ({:?}) on line {}", tt, self.line);
+
+                return Some(Ok(Token::new(tt, lex, self.line)));
+            }
+            // Otherwise it was whitespace / comment → continue loop.
         }
 
-        self.pending_token = None;
-
-        self.start = self.curr_ptr;
-
-        debug!("Starting new token scan at position {}", self.start);
-
-        let result: Result<(), String> = self.scan_token();
-
-        if let Err(e) = result {
-            debug!("Scan error: {}", e);
-            self.had_error = true;
-            return Some(Err(e));
-        }
-
-        if let Some(token_type) = self.pending_token.take() {
-            let lexeme: &str =
-                unsafe { std::str::from_utf8_unchecked(&self.source[self.start..self.curr_ptr]) };
-
-            info!(
-                "Emitting token: type={:?}, lexeme={}, line={}",
-                token_type, lexeme, self.line
-            );
-
-            Some(Ok(Token::new(token_type, lexeme.to_string(), self.line)))
-        } else {
-            debug!("No pending token, continuing scan");
-
-            self.next()
-        }
+        None // already yielded EOF
     }
 }
 
-impl FusedIterator for Scanner {}
+impl<'a> FusedIterator for Scanner<'a> {}
