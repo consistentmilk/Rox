@@ -74,7 +74,7 @@ pub enum Value<'a> {
 
     Class(LoxClass),
 
-    Instance(LoxInstance),
+    Instance(LoxInstance<'a>),
 }
 
 impl<'a> std::fmt::Display for Value<'a> {
@@ -110,10 +110,8 @@ pub struct LoxClass {
 
 impl LoxClass {
     /// Instantiates `this()` and returns the new object.
-    fn instantiate(&self) -> LoxInstance {
-        LoxInstance {
-            class: self.clone(),
-        }
+    fn instantiate<'a>(&self) -> LoxInstance<'a> {
+        LoxInstance::new(self.clone())
     }
 
     /// For now, classes take no constructor arguments.
@@ -130,12 +128,38 @@ impl std::fmt::Display for LoxClass {
 }
 
 /// An object instance produced by `ClassName()`
-#[derive(Debug, PartialEq, Clone)]
-pub struct LoxInstance {
+#[derive(Clone, Debug, PartialEq)]
+pub struct LoxInstance<'a> {
     pub class: LoxClass,
+    fields: Rc<RefCell<HashMap<String, Value<'a>>>>,
 }
 
-impl std::fmt::Display for LoxInstance {
+impl<'a> LoxInstance<'a> {
+    /// Create a fresh instance with its own (initially empty) field map.
+    fn new(class: LoxClass) -> Self {
+        LoxInstance {
+            class,
+            fields: Rc::new(RefCell::new(HashMap::new())),
+        }
+    }
+
+    fn get(&self, name: &str, line: usize) -> Result<Value<'a>> {
+        let map = self.fields.borrow();
+        if let Some(v) = map.get(name) {
+            Ok(v.clone())
+        } else {
+            Err(LoxError::Runtime(format!(
+                "Undefined property '{}' (line {}).",
+                name, line
+            )))
+        }
+    }
+
+    fn set(&self, name: &str, val: Value<'a>) {
+        self.fields.borrow_mut().insert(name.to_string(), val);
+    }
+}
+impl<'a> std::fmt::Display for LoxInstance<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{} instance", self.class.name)
     }
@@ -656,6 +680,7 @@ impl<'a> Interpreter<'a> {
 
                         func(args)
                     }
+
                     Value::Function(fun) => {
                         if args.len() != fun.arity() {
                             return Err(LoxError::Runtime(format!(
@@ -672,7 +697,7 @@ impl<'a> Interpreter<'a> {
                     Value::Class(class) => {
                         if args.len() != class.arity() {
                             return Err(LoxError::Runtime(format!(
-                                "Expected {} args but got {} (line {})",
+                                "Expected {} args but got {} (line {}).",
                                 class.arity(),
                                 args.len(),
                                 paren.line
@@ -686,6 +711,39 @@ impl<'a> Interpreter<'a> {
                         "Can only call functions (line {}).",
                         paren.line
                     ))),
+                }
+            }
+
+            Expr::Get { object, name } => {
+                let obj: Value<'a> = self.evaluate(object)?;
+
+                if let Value::Instance(inst) = obj {
+                    inst.get(name.lexeme, name.line)
+                } else {
+                    Err(LoxError::Runtime(format!(
+                        "Only instances have properties (line {}).",
+                        name.line
+                    )))
+                }
+            }
+
+            Expr::Set {
+                object,
+                name,
+                value,
+            } => {
+                let obj: Value<'a> = self.evaluate(object)?;
+                let val: Value<'a> = self.evaluate(value)?;
+
+                if let Value::Instance(inst) = obj {
+                    inst.set(name.lexeme, val.clone());
+
+                    Ok(val)
+                } else {
+                    Err(LoxError::Runtime(format!(
+                        "Only instances have fields (line {}).",
+                        name.line
+                    )))
                 }
             }
         }

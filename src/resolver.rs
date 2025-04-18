@@ -186,7 +186,7 @@ impl<'a, 'interp> Resolver<'a, 'interp> {
             }
 
             Expr::Variable(tok) => {
-                // ❌ Cannot read in own initializer
+                // Cannot read in own initializer
                 if let Some(scope) = self.scopes.last() {
                     if scope.get(tok.lexeme) == Some(&false) {
                         return Err(LoxError::resolve(
@@ -213,7 +213,15 @@ impl<'a, 'interp> Resolver<'a, 'interp> {
                     self.resolve_expr(arg)?;
                 }
             }
+
+            Expr::Get { object, .. } => self.resolve_expr(object)?,
+
+            Expr::Set { object, value, .. } => {
+                self.resolve_expr(object)?;
+                self.resolve_expr(value)?;
+            }
         }
+
         Ok(())
     }
 

@@ -159,6 +159,19 @@ pub enum Expr<'a> {
         /// Argument list (may be empty).
         arguments: Vec<Expr<'a>>,
     },
+
+    /// object.property
+    Get {
+        object: Box<Expr<'a>>,
+        name: &'a Token<'a>,
+    },
+
+    /// object.property = value
+    Set {
+        object: Box<Expr<'a>>,
+        name: &'a Token<'a>,
+        value: Box<Expr<'a>>,
+    },
 }
 
 /// **Abstract‑Syntax‑Tree node** for *statements* (complete executable
@@ -464,14 +477,26 @@ impl<'a> Parser<'a> {
             let equals: &Token<'_> = self.previous();
             let value: Expr<'a> = self.assignment()?;
 
-            if let Expr::Variable(name) = expr {
-                return Ok(Expr::Assign {
-                    name,
-                    value: Box::new(value),
-                });
-            }
+            match expr {
+                Expr::Variable(name) => {
+                    return Ok(Expr::Assign {
+                        name,
+                        value: Box::new(value),
+                    });
+                }
 
-            return Err(LoxError::parse(equals.line, "Invalid assignment target"));
+                Expr::Get { object, name } => {
+                    return Ok(Expr::Set {
+                        object,
+                        name,
+                        value: Box::new(value),
+                    });
+                }
+
+                _ => {
+                    return Err(LoxError::parse(equals.line, "Invalid assignment target"));
+                }
+            }
         }
 
         Ok(expr)
@@ -594,11 +619,19 @@ impl<'a> Parser<'a> {
     }
 
     fn call(&mut self) -> Result<Expr<'a>> {
-        let mut expr = self.primary()?;
+        let mut expr: Expr<'a> = self.primary()?;
 
         loop {
             if self.matches(TokenType::LEFT_PAREN) {
                 expr = self.finish_call(expr)?;
+            } else if self.matches(TokenType::DOT) {
+                let name: &Token<'_> =
+                    self.consume(TokenType::IDENTIFIER, "Expected property name after '.'")?;
+
+                expr = Expr::Get {
+                    object: Box::new(expr),
+                    name,
+                };
             } else {
                 break;
             }

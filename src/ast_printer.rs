@@ -7,7 +7,6 @@ pub struct AstPrinter;
 impl AstPrinter {
     pub fn print(expr: &Expr<'_>) -> String {
         match expr {
-            // ── literals ────────────────────────────────────────────────
             Expr::Literal(lit) => match lit {
                 LiteralValue::True => "true".into(),
 
@@ -26,16 +25,10 @@ impl AstPrinter {
                     }
                 }
             },
-
-            // ── grouping ────────────────────────────────────────────────
             Expr::Grouping(inner) => format!("(group {})", Self::print(inner)),
-
-            // ── unary operator ──────────────────────────────────────────
             Expr::Unary { operator, right } => {
                 format!("({} {})", operator.lexeme, Self::print(right))
             }
-
-            // ── binary operator ─────────────────────────────────────────
             Expr::Binary {
                 left,
                 operator,
@@ -46,8 +39,6 @@ impl AstPrinter {
                 Self::print(left),
                 Self::print(right)
             ),
-
-            // ── logical operator ───────────────────────────────────────
             Expr::Logical {
                 left,
                 operator,
@@ -58,12 +49,8 @@ impl AstPrinter {
                 Self::print(left),
                 Self::print(right)
             ),
-
-            // ── variable / assign / call (future stages) ───────────────
             Expr::Variable(name) => name.lexeme.into(),
-
             Expr::Assign { name, value } => format!("(= {} {})", name.lexeme, Self::print(value)),
-
             Expr::Call {
                 callee, arguments, ..
             } => {
@@ -75,6 +62,16 @@ impl AstPrinter {
                 s.push(')');
                 s
             }
+
+            #[allow(unused)]
+            Expr::Get { object, name } => todo!(),
+
+            #[allow(unused)]
+            Expr::Set {
+                object,
+                name,
+                value,
+            } => todo!(),
         }
     }
 }
