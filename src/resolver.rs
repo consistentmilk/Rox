@@ -59,9 +59,22 @@ impl<'a, 'interp> Resolver<'a, 'interp> {
     fn resolve_stmt(&mut self, stmt: &Stmt<'a>) -> Result<()> {
         debug!("Resolving stmt: {:?}", stmt);
         match stmt {
-            Stmt::Class { name } => {
+            Stmt::Class { name, methods } => {
+                // Declare & define the class name so methods can refer to it
                 self.declare(name)?;
                 self.define(name);
+
+                // Resolve each method as a function (enables 'return' inside)
+                for method in methods {
+                    if let Stmt::Function {
+                        name: _m_name,
+                        params,
+                        body,
+                    } = method
+                    {
+                        self.resolve_function(params, body)?;
+                    }
+                }
             }
 
             Stmt::Block(statements) => {

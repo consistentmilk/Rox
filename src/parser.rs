@@ -237,6 +237,7 @@ pub enum Stmt<'a> {
 
     Class {
         name: &'a Token<'a>,
+        methods: Vec<Stmt<'a>>,
     },
 }
 
@@ -295,9 +296,47 @@ impl<'a> Parser<'a> {
         let name: &Token<'_> = self.consume(TokenType::IDENTIFIER, "Expected class name")?;
 
         self.consume(TokenType::LEFT_BRACE, "Expected '{' before class body")?;
+
+        let mut methods: Vec<Stmt<'_>> = Vec::new();
+
+        while !self.check(TokenType::RIGHT_BRACE) && !self.is_at_end() {
+            // parse a method: IDENT "(" params? ")" block
+            let method_name = self.consume(TokenType::IDENTIFIER, "Expected method name")?;
+            self.consume(TokenType::LEFT_PAREN, "Expected '(' after method name")?;
+
+            let mut params: Vec<&Token<'_>> = Vec::new();
+
+            if !self.check(TokenType::RIGHT_PAREN) {
+                loop {
+                    if params.len() >= 255 {
+                        return Err(LoxError::parse(
+                            method_name.line,
+                            "Cannot have more than 255 parameters",
+                        ));
+                    }
+
+                    params.push(self.consume(TokenType::IDENTIFIER, "Expected parameter name")?);
+
+                    if !self.matches(TokenType::COMMA) {
+                        break;
+                    }
+                }
+            }
+            self.consume(TokenType::RIGHT_PAREN, "Expected ')' after parameters")?;
+            self.consume(TokenType::LEFT_BRACE, "Expected '{' before method body")?;
+
+            let body: Vec<Stmt<'a>> = self.block()?; // reuse block() to parse Vec<Stmt<'a>>
+
+            methods.push(Stmt::Function {
+                name: method_name,
+                params,
+                body,
+            });
+        }
+
         self.consume(TokenType::RIGHT_BRACE, "Expected '}' after class body")?;
 
-        Ok(Stmt::Class { name })
+        Ok(Stmt::Class { name, methods })
     }
 
     fn function(&mut self, _kind: &str) -> Result<Stmt<'a>> {

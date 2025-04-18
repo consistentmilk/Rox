@@ -72,7 +72,7 @@ pub enum Value<'a> {
 
     NativeFunction(NativeFunction<'a>),
 
-    Class(LoxClass),
+    Class(LoxClass<'a>),
 
     Instance(LoxInstance<'a>),
 }
@@ -103,14 +103,15 @@ impl<'a> std::fmt::Display for Value<'a> {
 // Classes (OOP)
 // ─────────────────────────────────────────────────────────────────────────────
 /// A user-defined class
-#[derive(Debug, PartialEq, Clone)]
-pub struct LoxClass {
+#[derive(Clone, Debug, PartialEq)]
+pub struct LoxClass<'a> {
     pub name: String,
+    pub methods: HashMap<String, LoxFunction<'a>>,
 }
 
-impl LoxClass {
+impl<'a> LoxClass<'a> {
     /// Instantiates `this()` and returns the new object.
-    fn instantiate<'a>(&self) -> LoxInstance<'a> {
+    fn instantiate(&self) -> LoxInstance<'a> {
         LoxInstance::new(self.clone())
     }
 
@@ -121,7 +122,7 @@ impl LoxClass {
     }
 }
 
-impl std::fmt::Display for LoxClass {
+impl<'a> std::fmt::Display for LoxClass<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.name)
     }
@@ -130,35 +131,45 @@ impl std::fmt::Display for LoxClass {
 /// An object instance produced by `ClassName()`
 #[derive(Clone, Debug, PartialEq)]
 pub struct LoxInstance<'a> {
-    pub class: LoxClass,
+    pub class: LoxClass<'a>,
     fields: Rc<RefCell<HashMap<String, Value<'a>>>>,
 }
 
 impl<'a> LoxInstance<'a> {
-    /// Create a fresh instance with its own (initially empty) field map.
-    fn new(class: LoxClass) -> Self {
+    pub fn new(class: LoxClass<'a>) -> Self {
         LoxInstance {
             class,
             fields: Rc::new(RefCell::new(HashMap::new())),
         }
     }
 
-    fn get(&self, name: &str, line: usize) -> Result<Value<'a>> {
-        let map = self.fields.borrow();
-        if let Some(v) = map.get(name) {
-            Ok(v.clone())
-        } else {
-            Err(LoxError::Runtime(format!(
-                "Undefined property '{}' (line {}).",
-                name, line
-            )))
+    pub fn get_property(&self, name: &Token<'a>) -> Result<Value<'a>> {
+        let key = name.lexeme;
+
+        // 1) fields
+        if let Some(v) = self.fields.borrow().get(key) {
+            return Ok(v.clone());
         }
+
+        // 2) methods
+        if let Some(method) = self.class.methods.get(key) {
+            return Ok(Value::Function(method.clone()));
+        }
+
+        // 3) not found
+        Err(LoxError::Runtime(format!(
+            "Undefined property '{}' (line {}).",
+            key, name.line
+        )))
     }
 
-    fn set(&self, name: &str, val: Value<'a>) {
-        self.fields.borrow_mut().insert(name.to_string(), val);
+    pub fn set_property(&self, name: &Token<'a>, val: Value<'a>) {
+        self.fields
+            .borrow_mut()
+            .insert(name.lexeme.to_string(), val);
     }
 }
+
 impl<'a> std::fmt::Display for LoxInstance<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{} instance", self.class.name)
@@ -520,14 +531,39 @@ impl<'a> Interpreter<'a> {
                 return Ok(Control::Return(v));
             }
 
-            Stmt::Class { name } => {
-                let klass: LoxClass = LoxClass {
+            Stmt::Class { name, methods } => {
+                // Build method map
+                let mut method_map: HashMap<String, LoxFunction<'_>> = HashMap::new();
+
+                for method in methods.iter() {
+                    if let Stmt::Function {
+                        name: m_name,
+                        params,
+                        body,
+                    } = method
+                    {
+                        let fun: LoxFunction<'_> = LoxFunction {
+                            name: m_name.lexeme.to_string(),
+                            params: params
+                                .iter()
+                                .map(|t: &&Token<'_>| t.lexeme.to_string())
+                                .collect(),
+                            body: body.as_slice(),
+                            closure: Rc::clone(&self.env),
+                        };
+
+                        method_map.insert(m_name.lexeme.to_string(), fun);
+                    }
+                }
+
+                let class: LoxClass<'_> = LoxClass {
                     name: name.lexeme.to_string(),
+                    methods: method_map,
                 };
 
                 self.env
                     .borrow_mut()
-                    .define(name.lexeme, Value::Class(klass));
+                    .define(name.lexeme, Value::Class(class));
 
                 Control::Normal
             }
@@ -718,7 +754,7 @@ impl<'a> Interpreter<'a> {
                 let obj: Value<'a> = self.evaluate(object)?;
 
                 if let Value::Instance(inst) = obj {
-                    inst.get(name.lexeme, name.line)
+                    inst.get_property(name)
                 } else {
                     Err(LoxError::Runtime(format!(
                         "Only instances have properties (line {}).",
@@ -736,8 +772,7 @@ impl<'a> Interpreter<'a> {
                 let val: Value<'a> = self.evaluate(value)?;
 
                 if let Value::Instance(inst) = obj {
-                    inst.set(name.lexeme, val.clone());
-
+                    inst.set_property(name, val.clone());
                     Ok(val)
                 } else {
                     Err(LoxError::Runtime(format!(
