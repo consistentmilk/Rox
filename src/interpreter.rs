@@ -569,7 +569,12 @@ impl<'a> Interpreter<'a> {
                 return Ok(Control::Return(v));
             }
 
-            Stmt::Class { name, methods } => {
+            #[allow(unused)]
+            Stmt::Class {
+                name,
+                methods,
+                superclass,
+            } => {
                 // Build method map
                 let mut method_map: HashMap<String, LoxFunction<'_>> = HashMap::new();
 

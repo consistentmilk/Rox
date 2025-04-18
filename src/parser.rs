@@ -241,6 +241,7 @@ pub enum Stmt<'a> {
     Class {
         name: &'a Token<'a>,
         methods: Vec<Stmt<'a>>,
+        superclass: Option<&'a Token<'a>>,
     },
 }
 
@@ -298,6 +299,15 @@ impl<'a> Parser<'a> {
     fn class_declaration(&mut self) -> Result<Stmt<'a>> {
         let name: &Token<'_> = self.consume(TokenType::IDENTIFIER, "Expected class name")?;
 
+        // Optional superclass '<' IDENTIFIER
+        let superclass = if self.matches(TokenType::LESS) {
+            let name = self.consume(TokenType::IDENTIFIER, "Expcted superclass name")?;
+
+            Some(name)
+        } else {
+            None
+        };
+
         self.consume(TokenType::LEFT_BRACE, "Expected '{' before class body")?;
 
         let mut methods: Vec<Stmt<'_>> = Vec::new();
@@ -339,7 +349,11 @@ impl<'a> Parser<'a> {
 
         self.consume(TokenType::RIGHT_BRACE, "Expected '}' after class body")?;
 
-        Ok(Stmt::Class { name, methods })
+        Ok(Stmt::Class {
+            name,
+            methods,
+            superclass,
+        })
     }
 
     fn function(&mut self, _kind: &str) -> Result<Stmt<'a>> {

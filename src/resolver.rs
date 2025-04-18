@@ -70,7 +70,12 @@ impl<'a, 'interp> Resolver<'a, 'interp> {
         debug!("Resolving stmt: {:?}", stmt);
 
         match stmt {
-            Stmt::Class { name, methods } => {
+            #[allow(unused)]
+            Stmt::Class {
+                name,
+                methods,
+                superclass,
+            } => {
                 // 1. Declare & define the class name so methods can refer to it
                 self.declare(name)?;
                 self.define(name);
@@ -126,32 +131,41 @@ impl<'a, 'interp> Resolver<'a, 'interp> {
             }
 
             Stmt::Block(statements) => {
-                // ① Push a new anonymous scope for `{ … }`
+                // 1. Push a new anonymous scope for `{ … }`
                 self.begin_scope();
+
                 for s in statements {
                     self.resolve_stmt(s)?;
                 }
+
+                // 2. Pop the block scope
                 self.end_scope();
             }
 
             Stmt::Var { name, initializer } => {
-                // ② var declaration: declare → resolve initializer → define
+                // 1. Declare the variable name (marked but not yet defined)
                 self.declare(name)?;
+
+                // 2. Resolve the initializer expression, if any
                 if let Some(expr) = initializer {
                     self.resolve_expr(expr)?;
                 }
+
+                // 3. Define the variable so it’s available in this scope
                 self.define(name);
             }
 
             Stmt::Function { name, params, body } => {
-                // ③ function declaration: name is visible *inside* its own body
+                // 1. Declare the function name (so it’s visible inside its own body)
                 self.declare(name)?;
+                // 2. Define it immediately (allow recursion)
                 self.define(name);
+                // 3. Resolve the function’s parameters and body
                 self.resolve_function(params, body)?;
             }
 
             Stmt::Expression(expr) | Stmt::Print(expr) => {
-                // ④ just resolve the inner expression
+                // 1. Resolve the inner expression of expression/print statements
                 self.resolve_expr(expr)?;
             }
 
@@ -160,17 +174,22 @@ impl<'a, 'interp> Resolver<'a, 'interp> {
                 then_branch,
                 else_branch,
             } => {
-                // ⑤ if
+                // 1. Resolve the condition expression
                 self.resolve_expr(condition)?;
+
+                // 2. Resolve the 'then' branch
                 self.resolve_stmt(then_branch)?;
+
+                // 3. Resolve the 'else' branch, if present
                 if let Some(eb) = else_branch.as_deref() {
                     self.resolve_stmt(eb)?;
                 }
             }
 
             Stmt::While { condition, body } => {
-                // ⑥ while
+                // 1. Resolve the loop condition
                 self.resolve_expr(condition)?;
+                // 2. Resolve the loop body
                 self.resolve_stmt(body)?;
             }
 
@@ -180,36 +199,49 @@ impl<'a, 'interp> Resolver<'a, 'interp> {
                 increment,
                 body,
             } => {
-                // ⑦ for—outer loop‐scope for initializer, then inner for body
+                // 1. Begin outer loop scope for initializer
                 self.begin_scope();
+
+                // 2. Handle initializer (either var declaration or statement)
                 if let Some(init) = initializer {
                     if let Stmt::Var { name, initializer } = &**init {
+                        // 2.1. Declare the loop variable
                         self.declare(name)?;
+                        // 2.2. Resolve its initializer
                         if let Some(expr) = initializer {
                             self.resolve_expr(expr)?;
                         }
+                        // 2.3. Define the loop variable
                         self.define(name);
                     } else {
+                        // 2.4. Resolve the initializer statement
                         self.resolve_stmt(init)?;
                     }
                 }
+
+                // 3. Resolve the loop condition, if present
                 if let Some(cond) = condition {
                     self.resolve_expr(cond)?;
                 }
+
+                // 4. Resolve the increment expression, if present
                 if let Some(inc) = increment {
                     self.resolve_expr(inc)?;
                 }
 
-                // body may shadow loop variables
+                // 5. Begin inner scope for the loop body (allows shadowing)
                 self.begin_scope();
                 self.resolve_stmt(body)?;
+
+                // 6. Exit inner body scope
                 self.end_scope();
 
+                // 7. Exit outer loop scope
                 self.end_scope();
             }
 
             Stmt::Return { keyword, value } => {
-                // Return only allowed in functions/initializers
+                // 1. Ensure we're inside a function or initializer
                 if self.current_function == FunctionType::None {
                     return Err(LoxError::resolve(
                         keyword.line,
@@ -217,7 +249,7 @@ impl<'a, 'interp> Resolver<'a, 'interp> {
                     ));
                 }
 
-                // If an initializer, bare 'return;' is oaky, but not 'return expr;'
+                // 2. In an initializer, only bare `return;` is allowed
                 if self.current_function == FunctionType::Initializer {
                     if value.is_some() {
                         return Err(LoxError::resolve(
@@ -226,15 +258,16 @@ impl<'a, 'interp> Resolver<'a, 'interp> {
                         ));
                     }
 
-                    // No Expression to resolve for a bare return
+                    // No expression to resolve for a bare return
                 } else {
-                    // Normal function: resolve returned expression
+                    // 3. Normal function: resolve the return expression if present
                     if let Some(expr) = value {
-                        self.resolve_expr(expr)?
+                        self.resolve_expr(expr)?;
                     }
                 }
             }
         }
+
         Ok(())
     }
 
@@ -245,23 +278,28 @@ impl<'a, 'interp> Resolver<'a, 'interp> {
     fn resolve_expr(&mut self, expr: &Expr<'a>) -> Result<()> {
         debug!("Resolving expr: {:?}", expr);
         match expr {
-            Expr::Literal(_) => {}
+            Expr::Literal(_) => {
+                // 1. Literals have no sub‑expressions
+            }
 
             Expr::Grouping(inner) => {
+                // 2. Resolve the inner expression of a grouping
                 self.resolve_expr(inner)?;
             }
 
             Expr::Unary { right, .. } => {
+                // 3. Resolve the operand of a unary expression
                 self.resolve_expr(right)?;
             }
 
             Expr::Binary { left, right, .. } | Expr::Logical { left, right, .. } => {
+                // 4. Resolve both sides of binary or logical operators
                 self.resolve_expr(left)?;
                 self.resolve_expr(right)?;
             }
 
             Expr::Variable(tok) => {
-                // Cannot read in own initializer
+                // 5. Prevent reading a variable in its own initializer
                 if let Some(scope) = self.scopes.last() {
                     if scope.get(tok.lexeme) == Some(&false) {
                         return Err(LoxError::resolve(
@@ -270,12 +308,12 @@ impl<'a, 'interp> Resolver<'a, 'interp> {
                         ));
                     }
                 }
-                // ✅ Bind either local *or* global
+                // 6. Bind this variable occurrence at its lexical depth
                 self.resolve_local(expr, tok);
             }
 
             Expr::Assign { name, value } => {
-                // First resolve RHS, then bind LHS
+                // 7. Resolve the right‑hand side first, then bind the assignment
                 self.resolve_expr(value)?;
                 self.resolve_local(expr, name);
             }
@@ -283,13 +321,16 @@ impl<'a, 'interp> Resolver<'a, 'interp> {
             Expr::Call {
                 callee, arguments, ..
             } => {
+                // 8. Resolve the callee expression and each argument
                 self.resolve_expr(callee)?;
+
                 for arg in arguments {
                     self.resolve_expr(arg)?;
                 }
             }
 
             Expr::This(keyword) => {
+                // 9. 'this' only valid inside class methods
                 if self.current_class == ClassType::None {
                     return Err(LoxError::resolve(
                         keyword.line,
@@ -297,13 +338,17 @@ impl<'a, 'interp> Resolver<'a, 'interp> {
                     ));
                 }
 
-                // Bind `this` like a local so the interpreter can find it.
+                // 10. Bind 'this' like a local variable
                 self.resolve_local(expr, keyword);
             }
 
-            Expr::Get { object, .. } => self.resolve_expr(object)?,
+            Expr::Get { object, .. } => {
+                // 11. Resolve the object whose property is being accessed
+                self.resolve_expr(object)?;
+            }
 
             Expr::Set { object, value, .. } => {
+                // 12. Resolve the target object then the value being assigned
                 self.resolve_expr(object)?;
                 self.resolve_expr(value)?;
             }
@@ -318,20 +363,32 @@ impl<'a, 'interp> Resolver<'a, 'interp> {
 
     /// Enter a fresh scope for a function’s parameters + body.
     fn resolve_function(&mut self, params: &[&'a Token<'a>], body: &[Stmt<'a>]) -> Result<()> {
-        let enclosing = self.current_function;
+        // 1. Save the enclosing function context
+        let enclosing: FunctionType = self.current_function;
+
+        // 2. Mark that we’re now inside a regular function
         self.current_function = FunctionType::Function;
 
+        // 3. Begin the function’s parameter scope
         self.begin_scope();
+
+        // 4. Declare and define each parameter
         for param in params {
             self.declare(param)?;
             self.define(param);
         }
+
+        // 5. Resolve each statement in the function body
         for stmt in body {
             self.resolve_stmt(stmt)?;
         }
+
+        // 6. End the function’s parameter scope
         self.end_scope();
 
+        // 7. Restore the previous function context
         self.current_function = enclosing;
+
         Ok(())
     }
 
@@ -341,15 +398,18 @@ impl<'a, 'interp> Resolver<'a, 'interp> {
 
     #[inline]
     fn begin_scope(&mut self) {
+        // 1. Push a new, empty scope map
         self.scopes.push(HashMap::new());
     }
 
     #[inline]
     fn end_scope(&mut self) {
+        // 2. Pop the innermost scope
         self.scopes.pop();
     }
 
     fn declare(&mut self, name: &Token<'a>) -> Result<()> {
+        // 1. If in a local scope, ensure no duplicate declarations
         if let Some(scope) = self.scopes.last_mut() {
             if scope.contains_key(name.lexeme) {
                 return Err(LoxError::resolve(
@@ -357,12 +417,14 @@ impl<'a, 'interp> Resolver<'a, 'interp> {
                     "Variable already declared in this scope",
                 ));
             }
+            // 2. Mark the name as declared but not yet defined
             scope.insert(name.lexeme, false);
         }
         Ok(())
     }
 
     fn define(&mut self, name: &Token<'a>) {
+        // 1. Mark the name as fully defined in the current scope
         if let Some(scope) = self.scopes.last_mut() {
             scope.insert(name.lexeme, true);
         }
@@ -374,20 +436,20 @@ impl<'a, 'interp> Resolver<'a, 'interp> {
 
     /// Record this variable occurrence as either:
     ///  - a local at depth `d`, or
-    ///  - a global if not found in *any* scope.
+    ///  - a global if not found in any scope.
     fn resolve_local(&mut self, expr: &Expr<'a>, name: &Token<'a>) {
-        // 1. check innermost → outermost
+        // 1. Search each scope from innermost outward
         for (depth, scope) in self.scopes.iter().rev().enumerate() {
             if scope.contains_key(name.lexeme) {
                 debug!("Resolved '{}' at depth {}", name.lexeme, depth);
+                // 2. Tell the interpreter about the local binding
                 self.interpreter.note_local(expr, depth);
                 return;
             }
         }
 
-        // 2. not found in any local scope ⇒ global
+        // 3. Not found in any scope → it's a global
         debug!("Resolved '{}' as global", name.lexeme);
-
         self.interpreter.note_global(expr);
     }
 }
