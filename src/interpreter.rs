@@ -110,15 +110,25 @@ pub struct LoxClass<'a> {
 }
 
 impl<'a> LoxClass<'a> {
-    /// Instantiates `this()` and returns the new object.
-    fn instantiate(&self) -> LoxInstance<'a> {
-        LoxInstance::new(self.clone())
+    /// Look up a method by name.
+    #[inline(always)]
+    fn find_method(&self, name: &str) -> Option<LoxFunction<'a>> {
+        self.methods.get(name).cloned()
     }
 
     /// For now, classes take no constructor arguments.
     #[inline(always)]
     fn arity(&self) -> usize {
-        0
+        if let Some(init) = self.find_method("init") {
+            init.arity()
+        } else {
+            0
+        }
+    }
+
+    /// Instantiates `this()` and returns the new object.
+    fn instantiate(&self) -> LoxInstance<'a> {
+        LoxInstance::new(self.clone())
     }
 }
 
@@ -640,7 +650,7 @@ impl<'a> Interpreter<'a> {
 
             // Unary operators: `-` and `!`
             Expr::Unary { operator, right } => {
-                let rv = self.evaluate(right)?;
+                let rv: Value<'a> = self.evaluate(right)?;
                 match operator.token_type {
                     TokenType::MINUS => self.negate_number(operator.line, rv),
                     TokenType::BANG => Ok(Value::Boolean(!self.is_truthy(&rv))),
@@ -706,7 +716,7 @@ impl<'a> Interpreter<'a> {
 
             // Assignment expression
             Expr::Assign { name, value } => {
-                let vv = self.evaluate(value)?;
+                let vv: Value<'a> = self.evaluate(value)?;
                 self.assign_variable(name, &vv, expr)?;
                 Ok(vv)
             }
@@ -752,15 +762,31 @@ impl<'a> Interpreter<'a> {
                     }
 
                     Value::Class(class) => {
-                        if args.len() != class.arity() {
+                        // 1. Check argument count against constructor
+                        let arity: usize = class.arity();
+
+                        if args.len() != arity {
                             return Err(LoxError::Runtime(format!(
                                 "Expected {} args but got {} (line {}).",
-                                class.arity(),
+                                arity,
                                 args.len(),
                                 paren.line
                             )));
                         }
 
+                        // 2. Create the raw instance
+                        let instance: LoxInstance<'_> = class.instantiate();
+
+                        // 3. If there's an init method, bind and invoke it on the new instance
+                        if let Some(initializer) = class.find_method("init") {
+                            let bound_init = initializer.bind(Value::Instance(instance.clone()));
+
+                            // We will ignore the return value of init. Methods that return
+                            // this explicitly still yield the instance
+                            bound_init.call(self, args)?;
+                        }
+
+                        // Always return the instance
                         Ok(Value::Instance(class.instantiate()))
                     }
 
