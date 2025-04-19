@@ -1,13 +1,15 @@
-class Default {
-  // this is the constructor
-  init() {
-    // it should be able to set<|SPACE|>    // properties on the instance
-    this.x = "foo";
-    this.y = 91;
+class Doughnut {
+  cook() {
+    print "Fry until golden brown.";
   }
 }
 
-// the constructor should be called
-// automatically  when the class is being<|SPACE|>// instantiated
-print Default().x;
-print Default().y;
+// Super can be used to call the overridden method
+// of the parent class
+class BostonCream < Doughnut {
+  cook() {
+    super.cook();
+  }
+}
+
+BostonCream().cook();

@@ -601,67 +601,109 @@ impl<'a> Interpreter<'a> {
                 return Ok(Control::Return(v));
             }
 
-            // 10. Class declaration: handle inheritance and method map
+            // 10. Class declaration: inheritance, super-binding, and method map setup
             Stmt::Class {
                 name,
                 methods,
                 superclass,
             } => {
-                // 10.1 Evaluate optional superclass and ensure it's a class
+                // 10.1 Resolve the optional superclass:
+                //     If a superclass token is present, look it up at runtime;
+                //     ensure the value is actually a class.
                 let superclass_cls: Option<Rc<LoxClass<'_>>> = if let Some(super_tok) = superclass {
-                    let val = self.env.borrow().get(super_tok.lexeme)?;
-                    if let Value::Class(ref sup) = val {
-                        Some(Rc::new(sup.clone()))
-                    } else {
-                        return Err(LoxError::Runtime(format!(
-                            "Superclass '{}' is not a class (line {}).",
-                            super_tok.lexeme, super_tok.line
-                        )));
+                    match self.env.borrow().get(super_tok.lexeme)? {
+                        Value::Class(ref sup) => Some(Rc::new(sup.clone())),
+                        _ => {
+                            // Runtime error when the bound value is not a class
+                            return Err(LoxError::Runtime(format!(
+                                "Superclass must be a class.\n[line {}]",
+                                super_tok.line
+                            )));
+                        }
                     }
                 } else {
                     None
                 };
 
-                // 10.2 Define a placeholder for recursive references
+                // 10.2 Define the class name placeholder in the current environment:
+                //     This allows recursive references to the class within its own methods.
                 self.env.borrow_mut().define(name.lexeme, Value::Nil);
 
-                // 10.3 Start with inherited methods from the superclass
-                let mut method_map = if let Some(ref sup) = superclass_cls {
-                    sup.methods.clone()
-                } else {
-                    HashMap::new()
-                };
+                // 10.3 Bind `super` if a superclass exists:
+                //     Save the current environment so we can restore it later.
+                let prev_env: Rc<RefCell<Environment<'a>>> = Rc::clone(&self.env);
 
-                // 10.4 Add or override with methods declared in this class
-                for method in methods.iter() {
+                if let Some(ref sup_cls) = superclass_cls {
+                    // Create a new child environment whose parent is the current env
+                    let mut super_env: Environment<'_> =
+                        Environment::with_enclosing(Rc::clone(&self.env));
+
+                    // Define `super` to point to the superclass value
+                    super_env.define("super", Value::Class(sup_cls.as_ref().clone()));
+
+                    // Switch into the `super`-binding environment for method closure creation
+                    self.env = Rc::new(RefCell::new(super_env));
+                }
+
+                // 10.4 Initialize the method map with inherited methods (if any):
+                //     Clone the superclass's methods so we can override selectively.
+                let mut method_map: HashMap<String, LoxFunction<'_>> =
+                    if let Some(ref sup_cls) = superclass_cls {
+                        sup_cls.methods.clone()
+                    } else {
+                        HashMap::new()
+                    };
+
+                // 10.5 Add or override with this class’s own methods:
+                //     Each method closure captures the environment where `super` is bound
+                for method in methods {
                     if let Stmt::Function {
                         name: m_name,
                         params,
                         body,
                     } = method
                     {
-                        let fun = LoxFunction {
+                        // Create a LoxFunction closure:
+                        // - `name`: method name
+                        // - `params`: parameter list converted to Strings
+                        // - `body`: AST slice of statements
+                        // - `closure`: the environment that has `super` defined
+                        let fun: LoxFunction<'_> = LoxFunction {
                             name: m_name.lexeme.to_string(),
-                            params: params.iter().map(|t| t.lexeme.to_string()).collect(),
+                            params: params
+                                .iter()
+                                .map(|t: &&Token<'_>| t.lexeme.to_string())
+                                .collect(),
                             body: body.as_slice(),
                             closure: Rc::clone(&self.env),
                         };
+
+                        // Insert or override in the method map
                         method_map.insert(m_name.lexeme.to_string(), fun);
                     }
                 }
 
-                // 10.5 Build the class object with its name, methods, and optional superclass
-                let class = LoxClass {
+                // 10.6 Restore the outer environment (pop `super` scope):
+                //     Method closures will capture the correct `super` binding.
+                self.env = prev_env;
+
+                // 10.7 Construct the final LoxClass object:
+                //     - `name`: class name
+                //     - `methods`: combined inherited + overridden methods
+                //     - `superclass`: optional superclass reference
+                let class: LoxClass<'_> = LoxClass {
                     name: name.lexeme.to_string(),
                     methods: method_map,
                     superclass: superclass_cls,
                 };
 
-                // 10.6 Bind the finalized class into the environment
+                // 10.8 Bind the fully-constructed class into the environment:
+                //     Replaces the earlier placeholder with the actual class value.
                 self.env
                     .borrow_mut()
                     .define(name.lexeme, Value::Class(class));
 
+                // 10.9 Finally, normal control flow continues
                 Control::Normal
             }
         };
@@ -902,6 +944,40 @@ impl<'a> Interpreter<'a> {
                     Err(LoxError::Runtime(format!(
                         "Only instances have fields (line {}).",
                         name.line
+                    )))
+                }
+            }
+
+            Expr::Super { method, .. } => {
+                // 1. Determine the lexical distance for 'super'
+                let dist = match self.locals.get(&(expr as *const _)) {
+                    Some(Resolution::Local(d)) => *d,
+
+                    _ => unreachable!(),
+                };
+
+                // 2. Fetch the superclass (bound under 'super')
+                let superclass = match self.get_at(dist, "super")? {
+                    Value::Class(c) => c,
+
+                    _ => unreachable!(),
+                };
+
+                // 3. Fetch 'this' one level nearer
+                let instance = match self.get_at(dist - 1, "this") {
+                    Ok(Value::Instance(inst)) => inst,
+
+                    _ => unreachable!(),
+                };
+
+                // 4. Look up the method on superclass
+                if let Some(func) = superclass.find_method(method.lexeme) {
+                    // Bind to 'this' and return
+                    Ok(Value::Function(func.bind(Value::Instance(instance))))
+                } else {
+                    Err(LoxError::Runtime(format!(
+                        "Undefined property '{}' (line {}).",
+                        method.lexeme, method.line
                     )))
                 }
             }

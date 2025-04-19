@@ -111,10 +111,9 @@ impl<'a, 'interp> Resolver<'a, 'interp> {
                 methods,
                 superclass,
             } => {
-                // Self inheritance check
+                // 1. Self‑inheritance guard
                 if let Some(super_tok) = superclass {
                     if super_tok.lexeme == name.lexeme {
-                        // A class cannot inherit from itself
                         return Err(LoxError::resolve(
                             super_tok.line,
                             "A class can't inherit from itself.",
@@ -122,57 +121,61 @@ impl<'a, 'interp> Resolver<'a, 'interp> {
                     }
                 }
 
-                // 1. Declare & define the class name so methods can refer to it
+                // 2. Declare & define the class name so methods (including init) can refer to it
                 self.declare(name)?;
                 self.define(name);
 
-                // 2. Mark that we are inside a class
+                // 3. Save and enter the class context
                 let enclosing_class: ClassType = self.current_class;
                 self.current_class = ClassType::Class;
 
-                // 3. For each method, open a 'this' scope, then resolve the method body
-                for method in methods.iter() {
+                // 4. If there is a superclass, resolve it and bind `super`
+                if let Some(super_tok) = superclass {
+                    // Resolve the superclass variable (must exist and be a class)
+                    self.resolve_expr(&Expr::Variable(super_tok))?;
+
+                    // Open a scope for `super`
+                    self.begin_scope();
+                    self.scopes.last_mut().unwrap().insert("super", true);
+                }
+
+                // 5. Open the implicit `this` scope for methods
+                self.begin_scope();
+                self.scopes.last_mut().unwrap().insert("this", true);
+
+                // 6. Resolve each method in its own function context
+                for method in methods {
                     if let Stmt::Function {
                         name: m_name,
                         params,
                         body,
                     } = method
                     {
-                        // 4. Mark enclosing function type
-                        let enclosing: FunctionType = self.current_function;
+                        // 6a. Declare & define the method name to allow recursion within the class
+                        self.declare(m_name)?;
+                        self.define(m_name);
 
-                        self.current_function = if m_name.lexeme == "init" {
+                        // 6b. Determine whether this is an initializer or a normal method
+                        let kind = if m_name.lexeme == "init" {
                             FunctionType::Initializer
                         } else {
                             FunctionType::Function
                         };
 
-                        // 4. Begin a fresh scope for 'this'
-                        self.begin_scope();
-
-                        // 5. Inject 'this' so Expr::This will resolve
-                        self.scopes.last_mut().unwrap().insert("this", true);
-
-                        // 6. Declare and define parameters
-                        for params in params {
-                            self.declare(params)?;
-                            self.define(params);
-                        }
-
-                        // 7. Resolve the body statements
-                        for stmt in body {
-                            self.resolve_stmt(stmt)?;
-                        }
-
-                        // 6. Pop the 'this' scope
-                        self.end_scope();
-
-                        // 7. Restore enclosing function
-                        self.current_function = enclosing;
+                        // 6c. Resolve the method’s parameters and body under the chosen context
+                        self.resolve_function(kind, params, body)?;
                     }
                 }
 
-                // 8. Restore the outer class context
+                // 7. Close the `this` scope
+                self.end_scope();
+
+                // 8. If we opened a `super` scope, close it now
+                if superclass.is_some() {
+                    self.end_scope();
+                }
+
+                // 9. Restore the outer class context
                 self.current_class = enclosing_class;
             }
 
@@ -204,10 +207,12 @@ impl<'a, 'interp> Resolver<'a, 'interp> {
             Stmt::Function { name, params, body } => {
                 // 1. Declare the function name (so it’s visible inside its own body)
                 self.declare(name)?;
+
                 // 2. Define it immediately (allow recursion)
                 self.define(name);
-                // 3. Resolve the function’s parameters and body
-                self.resolve_function(params, body)?;
+
+                // 3. Resolve the function’s parameters and body under a normal function context
+                self.resolve_function(FunctionType::Function, params, body)?;
             }
 
             Stmt::Expression(expr) | Stmt::Print(expr) => {
@@ -235,6 +240,7 @@ impl<'a, 'interp> Resolver<'a, 'interp> {
             Stmt::While { condition, body } => {
                 // 1. Resolve the loop condition
                 self.resolve_expr(condition)?;
+
                 // 2. Resolve the loop body
                 self.resolve_stmt(body)?;
             }
@@ -253,10 +259,12 @@ impl<'a, 'interp> Resolver<'a, 'interp> {
                     if let Stmt::Var { name, initializer } = &**init {
                         // 2.1. Declare the loop variable
                         self.declare(name)?;
+
                         // 2.2. Resolve its initializer
                         if let Some(expr) = initializer {
                             self.resolve_expr(expr)?;
                         }
+
                         // 2.3. Define the loop variable
                         self.define(name);
                     } else {
@@ -398,6 +406,26 @@ impl<'a, 'interp> Resolver<'a, 'interp> {
                 self.resolve_expr(object)?;
                 self.resolve_expr(value)?;
             }
+
+            Expr::Super { keyword, .. } => {
+                // 'super' only valid inside a subclass
+                if self.current_class == ClassType::None {
+                    return Err(LoxError::resolve(
+                        keyword.line,
+                        "Cannot use 'super' outside of a class.",
+                    ));
+                }
+
+                if self.current_class != ClassType::Class {
+                    return Err(LoxError::resolve(
+                        keyword.line,
+                        "Cannot use 'super'in a class with no superclass.",
+                    ));
+                }
+
+                // Bind 'super' like a local variable
+                self.resolve_local(expr, keyword);
+            }
         }
 
         Ok(())
@@ -408,31 +436,41 @@ impl<'a, 'interp> Resolver<'a, 'interp> {
     // ─────────────────────────────────────────────────────────────────────────
 
     /// Enter a fresh scope for a function’s parameters + body.
-    fn resolve_function(&mut self, params: &[&'a Token<'a>], body: &[Stmt<'a>]) -> Result<()> {
-        // 1. Save the enclosing function context
-        let enclosing: FunctionType = self.current_function;
+    ///
+    /// `kind` indicates whether this is a normal function or an initializer.
+    fn resolve_function(
+        &mut self,
+        kind: FunctionType,
+        params: &[&'a Token<'a>],
+        body: &[Stmt<'a>],
+    ) -> Result<()> {
+        // 1. Save the enclosing function context so we can restore it later.
+        let enclosing = self.current_function;
 
-        // 2. Mark that we’re now inside a regular function
-        self.current_function = FunctionType::Function;
+        // 2. Set the current function context to the passed‑in kind
+        //    (FunctionType::Function or FunctionType::Initializer).
+        self.current_function = kind;
 
-        // 3. Begin the function’s parameter scope
+        // 3. Begin a new lexical scope for the function parameters & body.
         self.begin_scope();
 
-        // 4. Declare and define each parameter
+        // 4. Declare and immediately define each parameter in this new scope.
         for param in params {
+            // 4a. Declare the parameter name (ensuring no duplicate).
             self.declare(param)?;
+            // 4b. Mark the parameter as defined so it can be read in its own initializer.
             self.define(param);
         }
 
-        // 5. Resolve each statement in the function body
+        // 5. Resolve each statement in the function body under the current context.
         for stmt in body {
             self.resolve_stmt(stmt)?;
         }
 
-        // 6. End the function’s parameter scope
+        // 6. End the function’s parameter/body scope, popping all parameter bindings.
         self.end_scope();
 
-        // 7. Restore the previous function context
+        // 7. Restore the previous function context (e.g., back to Initializer or None).
         self.current_function = enclosing;
 
         Ok(())

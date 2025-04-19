@@ -172,6 +172,15 @@ pub enum Expr<'a> {
 
     /// The 'this' keyword inside a method.
     This(&'a Token<'a>),
+
+    /// Superclass method invocation: `super.method`
+    Super {
+        /// The `super` keyword token.
+        keyword: &'a Token<'a>,
+
+        /// The method name to invoke.
+        method: &'a Token<'a>,
+    },
 }
 
 /// **Abstract‑Syntax‑Tree node** for *statements* (complete executable
@@ -851,7 +860,19 @@ impl<'a> Parser<'a> {
             return Ok(Expr::This(self.previous()));
         }
 
-        // 7. Error if nothing matched
+        // 7. 'super' keyword for superclass method calss
+        if self.matches(TokenType::SUPER) {
+            let keyword: &Token<'_> = self.previous();
+
+            self.consume(TokenType::DOT, "Expected '.' after 'super'.")?;
+
+            let method: &Token<'_> =
+                self.consume(TokenType::IDENTIFIER, "EExpected supreclass method name.")?;
+
+            return Ok(Expr::Super { keyword, method });
+        }
+
+        // 8. Error if nothing matched
         Err(LoxError::parse(self.peek().line, "Expected expression"))
     }
 

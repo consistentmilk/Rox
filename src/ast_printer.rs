@@ -135,6 +135,8 @@ impl AstPrinter {
                 // 'this' keyword prints as-is
                 keyword.lexeme.into()
             }
+
+            Expr::Super { .. } => todo!(),
         }
     }
 }
