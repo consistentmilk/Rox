@@ -106,12 +106,22 @@ impl<'a, 'interp> Resolver<'a, 'interp> {
         debug!("Resolving stmt: {:?}", stmt);
 
         match stmt {
-            #[allow(unused)]
             Stmt::Class {
                 name,
                 methods,
                 superclass,
             } => {
+                // Self inheritance check
+                if let Some(super_tok) = superclass {
+                    if super_tok.lexeme == name.lexeme {
+                        // A class cannot inherit from itself
+                        return Err(LoxError::resolve(
+                            super_tok.line,
+                            "A class can't inherit from itself.",
+                        ));
+                    }
+                }
+
                 // 1. Declare & define the class name so methods can refer to it
                 self.declare(name)?;
                 self.define(name);
