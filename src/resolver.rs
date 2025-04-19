@@ -61,8 +61,14 @@ enum FunctionType {
 #[allow(unused)]
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 enum ClassType {
+    /// Not inside any class
     None,
+
+    /// Insie a class declaration _without_ a superclass
     Class,
+
+    /// Inside a class declaration _with_ a superclass
+    Subclass,
 }
 
 /// Resolver: tracks scopes, enforces static rules, and *records* binding
@@ -127,9 +133,15 @@ impl<'a, 'interp> Resolver<'a, 'interp> {
 
                 // 3. Save and enter the class context
                 let enclosing_class: ClassType = self.current_class;
-                self.current_class = ClassType::Class;
 
-                // 4. If there is a superclass, resolve it and bind `super`
+                // 4. If there's a superclass token, we're in a subclass; otherwise in a plain class
+                self.current_class = if superclass.is_some() {
+                    ClassType::Subclass
+                } else {
+                    ClassType::Class
+                };
+
+                // 5. If there is a superclass, resolve it and bind `super`
                 if let Some(super_tok) = superclass {
                     // Resolve the superclass variable (must exist and be a class)
                     self.resolve_expr(&Expr::Variable(super_tok))?;
@@ -139,11 +151,11 @@ impl<'a, 'interp> Resolver<'a, 'interp> {
                     self.scopes.last_mut().unwrap().insert("super", true);
                 }
 
-                // 5. Open the implicit `this` scope for methods
+                // 6. Open the implicit `this` scope for methods
                 self.begin_scope();
                 self.scopes.last_mut().unwrap().insert("this", true);
 
-                // 6. Resolve each method in its own function context
+                // 7. Resolve each method in its own function context
                 for method in methods {
                     if let Stmt::Function {
                         name: m_name,
@@ -151,31 +163,31 @@ impl<'a, 'interp> Resolver<'a, 'interp> {
                         body,
                     } = method
                     {
-                        // 6a. Declare & define the method name to allow recursion within the class
+                        // 7a. Declare & define the method name to allow recursion within the class
                         self.declare(m_name)?;
                         self.define(m_name);
 
-                        // 6b. Determine whether this is an initializer or a normal method
+                        // 7b. Determine whether this is an initializer or a normal method
                         let kind = if m_name.lexeme == "init" {
                             FunctionType::Initializer
                         } else {
                             FunctionType::Function
                         };
 
-                        // 6c. Resolve the method’s parameters and body under the chosen context
+                        // 7c. Resolve the method’s parameters and body under the chosen context
                         self.resolve_function(kind, params, body)?;
                     }
                 }
 
-                // 7. Close the `this` scope
+                // 8. Close the `this` scope
                 self.end_scope();
 
-                // 8. If we opened a `super` scope, close it now
+                // 9. If we opened a `super` scope, close it now
                 if superclass.is_some() {
                     self.end_scope();
                 }
 
-                // 9. Restore the outer class context
+                // 10. Restore the outer class context
                 self.current_class = enclosing_class;
             }
 
@@ -408,7 +420,7 @@ impl<'a, 'interp> Resolver<'a, 'interp> {
             }
 
             Expr::Super { keyword, .. } => {
-                // 'super' only valid inside a subclass
+                // 1. Disallow outside any class
                 if self.current_class == ClassType::None {
                     return Err(LoxError::resolve(
                         keyword.line,
@@ -416,14 +428,15 @@ impl<'a, 'interp> Resolver<'a, 'interp> {
                     ));
                 }
 
-                if self.current_class != ClassType::Class {
+                // 2. Disallow in a class with no superclass
+                if self.current_class != ClassType::Subclass {
                     return Err(LoxError::resolve(
                         keyword.line,
-                        "Cannot use 'super'in a class with no superclass.",
+                        "Cannot use 'super' in a class with no superclass.",
                     ));
                 }
 
-                // Bind 'super' like a local variable
+                // 3. Valid. Bind 'super' like a local variable.
                 self.resolve_local(expr, keyword);
             }
         }
