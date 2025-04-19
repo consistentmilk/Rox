@@ -1,7 +1,5 @@
-#![allow(unused)]
-
 use std::fs::File;
-use std::io::{BufReader, Read, Write};
+use std::io::Write;
 use std::path::PathBuf;
 
 use memmap2::Mmap;
@@ -45,25 +43,6 @@ enum Commands {
 
     /// Runs input from a file as a Lox program
     Run { filename: Option<PathBuf> },
-}
-
-/// Reads the contents of a file into a Vec<u8>
-fn read_file(filename: PathBuf) -> Result<Vec<u8>> {
-    info!("Reading file: {:?}", filename);
-
-    let file: File =
-        File::open(&filename).context(format!("Failed to open file {:?}", filename))?;
-
-    let mut reader: BufReader<File> = BufReader::new(file);
-    let mut buf: Vec<u8> = Vec::new();
-
-    let bytes: usize = reader
-        .read_to_end(&mut buf)
-        .context(format!("Failed to read file {:?}", filename))?;
-
-    info!("Read {} bytes from {:?}", bytes, filename);
-
-    Ok(buf)
 }
 
 fn init_logger() -> Result<()> {

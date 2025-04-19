@@ -1,80 +1,140 @@
+//! Module `ast_printer` provides functionality to convert Lox AST expressions
+//! into a human-readable prefix notation string (CodeCrafters style). This is
+//! primarily used for debugging and testing the expression parser.
+//!
+//! # Overview
+//!
+//! - Defines the `AstPrinter` struct with a single `print` method.
+//! - Recursively traverses the `Expr` AST, formatting nodes in prefix form.
+//! - Allocates only for the final output string; intermediate operations avoid heap allocations where possible.
+//!
+//! # Example
+//!
+//! ```rust
+//! use lox::ast_printer::AstPrinter;
+//! use lox::parser::Expr;
+//!
+//! // Given an expression AST `expr`, obtain its prefix notation:
+//! let s = AstPrinter::print(&expr);
+//! println!("{}", s);  // e.g. "(* 1 (group 2))"
+//! ```
+
 use crate::parser::{Expr, LiteralValue};
 
-/// Converts an expression to the CodeCrafters/Crafting‑Interpreters
-/// prefix form (no heap allocations except `String` joins for output).
+/// `AstPrinter` traverses an expression AST and produces a prefix notation string.
+/// Only final output uses heap allocation for `String` joining; inner recursion uses stack.
 pub struct AstPrinter;
 
 impl AstPrinter {
+    /// Print the given expression in prefix notation.
+    ///
+    /// # Parameters
+    /// - `expr`: Reference to the AST node to format.
+    ///
+    /// # Returns
+    /// A `String` containing the prefix-formatted representation.
     pub fn print(expr: &Expr<'_>) -> String {
         match expr {
             Expr::Literal(lit) => match lit {
                 LiteralValue::True => "true".into(),
-
                 LiteralValue::False => "false".into(),
-
                 LiteralValue::Nil => "nil".into(),
-
-                LiteralValue::Str(s) => format!("{}", s),
-
+                LiteralValue::Str(s) => s.clone(),
                 LiteralValue::Number(n) => {
+                    // Format numeric literals, preserving one decimal for integers
                     if n.fract() == 0.0 {
-                        // 3.0 → 3
+                        // e.g., 3.0 → "3.0"
                         format!("{:.1}", n)
                     } else {
                         n.to_string()
                     }
                 }
             },
-            Expr::Grouping(inner) => format!("(group {})", Self::print(inner)),
+
+            Expr::Grouping(inner) => {
+                // Parenthesized sub-expression formatted in prefix form
+                format!("(group {})", Self::print(inner))
+            }
+
             Expr::Unary { operator, right } => {
+                // Prefix unary operator: (! expr) or (- expr)
                 format!("({} {})", operator.lexeme, Self::print(right))
             }
+
             Expr::Binary {
                 left,
                 operator,
                 right,
-            } => format!(
-                "({} {} {})",
-                operator.lexeme,
-                Self::print(left),
-                Self::print(right)
-            ),
+            } => {
+                // Infix binary operator rendered as prefix: (op left right)
+                format!(
+                    "({} {} {})",
+                    operator.lexeme,
+                    Self::print(left),
+                    Self::print(right)
+                )
+            }
+
             Expr::Logical {
                 left,
                 operator,
                 right,
-            } => format!(
-                "({} {} {})",
-                operator.lexeme,
-                Self::print(left),
-                Self::print(right)
-            ),
-            Expr::Variable(name) => name.lexeme.into(),
-            Expr::Assign { name, value } => format!("(= {} {})", name.lexeme, Self::print(value)),
+            } => {
+                // Logical operators 'and'/'or' in prefix form
+                format!(
+                    "({} {} {})",
+                    operator.lexeme,
+                    Self::print(left),
+                    Self::print(right)
+                )
+            }
+
+            Expr::Variable(name) => {
+                // Variable access prints the identifier lexeme
+                name.lexeme.into()
+            }
+
+            Expr::Assign { name, value } => {
+                // Assignment formatted as (= name value)
+                format!("(= {} {})", name.lexeme, Self::print(value))
+            }
+
             Expr::Call {
                 callee, arguments, ..
             } => {
-                let mut s = format!("(call {}", Self::print(callee));
+                // Function or method call: (call callee arg1 arg2 ...)
+                let mut result = format!("(call {}", Self::print(callee));
                 for arg in arguments {
-                    s.push(' ');
-                    s.push_str(&Self::print(arg));
+                    result.push(' ');
+                    result.push_str(&Self::print(arg));
                 }
-                s.push(')');
-                s
+                result.push(')');
+                result
             }
 
-            #[allow(unused)]
-            Expr::Get { object, name } => todo!(),
+            Expr::Get { object, name } => {
+                // Property access formatted as (get object propertyName)
+                format!("(get {} {})", Self::print(object), name.lexeme)
+            }
 
-            #[allow(unused)]
             Expr::Set {
                 object,
                 name,
                 value,
-            } => todo!(),
+            } => {
+                // Property assignment formatted as (set object propertyName value)
+                format!(
+                    "(set {} {} {})",
+                    Self::print(object),
+                    name.lexeme,
+                    Self::print(value)
+                )
+            }
 
-            #[allow(unused)]
-            Expr::This(keyword) => todo!(),
+            Expr::This(keyword) => {
+                // 'this' keyword prints as-is
+                keyword.lexeme.into()
+            }
         }
     }
 }
