@@ -1,11 +1,47 @@
-//! Static resolver pass for the **Lox** interpreter.
+//! Static resolution pass for the Lox interpreter.
 //!
-//! This resolver does three things in one AST walk:
-//! 1. Build lexical scopes (stack of `HashMap<&str,bool>` tracking declared/defined).
-//! 2. Report static errors (redeclaration, forward‑read in initializer, invalid `return`).
-//! 3. Tell the interpreter, for *each* variable occurrence, whether it’s a local
-//!    (and at what depth) or a global—so the interpreter never falls back to
-//!    dynamic lookup that would see a later shadowing local.
+//! This module performs a single AST walk to:
+//! 1. **Build lexical scopes**: maintains a stack of `HashMap<&str,bool>` tracking declared
+//!    (false) and fully defined (true) names in each nested block or function.
+//! 2. **Enforce static rules**: reports errors such as redeclaration in the same scope,
+//!    reading a variable in its own initializer, invalid `return` outside functions,
+//!    and illegal use of `this` outside of class methods.
+//! 3. **Record binding distances**: for every variable occurrence (`Expr::Variable` or
+//!    `Expr::Assign`), calls back into the interpreter to note whether it is a local
+//!    (and at what depth) or a global. This enables the runtime to perform O(1)
+//!    lookups by climbing exactly the right number of environment frames.
+//!
+//! # Workflow Overview
+//!
+//! 1. **Instantiation** (`Resolver::new`)
+//!    - Captures a mutable reference to the `Interpreter`, where binding distances will be recorded.
+//!    - Initializes empty scope stack and function/class context flags.
+//!
+//! 2. **Resolution Entry Point** (`resolve(&[Stmt])`)
+//!    - Walks each top‑level statement via `resolve_stmt`, propagating errors.
+//!
+//! 3. **Statement Resolution** (`resolve_stmt`)
+//!    - Declares and defines names for `var`, `fun`, and `class` declarations.
+//!    - Handles nested scopes for blocks (`{ … }`), `for`, `if`, `while` statements.
+//!    - Manages `return` validity depending on whether inside a function or initializer.
+//!    - Injects `this` in class method scopes and enforces `super`/`this` rules.
+//!
+//! 4. **Expression Resolution** (`resolve_expr`)
+//!    - Recursively descends into expression nodes (`Literal`, `Grouping`, `Unary`, `Binary`, `Logical`, `Call`, `Get`, `Set`, `This`).
+//!    - For variable reads and assignments, ensures no forward-read in initializers and calls `resolve_local`.
+//!
+//! 5. **Error Recovery**
+//!    - No in-place recovery: resolution halts on the first static error, returning a `LoxError::Resolve`.
+//!
+//! # Usage
+//!
+//! After parsing, before interpretation, invoke:
+//! ```rust
+//! let mut resolver = Resolver::new(&mut interpreter);
+//! resolver.resolve(&ast)?;
+//! ```
+//! This ensures all variables, functions, and classes are properly bound, and enables fast
+//! environment lookups during execution.
 
 use crate::error::{LoxError, Result};
 use crate::interpreter::Interpreter;

@@ -1,20 +1,59 @@
-//! Streaming UTF‑8 lexer for the Crafting‑Interpreters dialect of Lox.
+//! Module `scanner` implements a one‑pass, streaming UTF‑8 lexer for the Lox language.
 //!
-//! ### Public API surface
-//! The lexer is an **iterator** over `Result<Token<'a>, LoxError>`.  A typical
-//! usage looks like:
+//! It transforms a byte slice (`&[u8]`) into a sequence of `Token<'a>`s, skipping whitespace
+//! and comments, and emitting exactly one `EOF` token at the end. Designed as a `FusedIterator`,
+//! it can be chained safely with other iterator adapters.
+//!
+//! # Public API
+//!
+//! - `Scanner::new(src: &'a [u8]) -> Scanner<'a>`  
+//!   Create a new lexer over the input buffer.
+//!
+//! - `impl Iterator for Scanner<'a>`  
+//!   Yields `Result<Token<'a>, LoxError>` on each `.next()`, where `Ok(token)` is a scanned token
+//!   and `Err` reports a lexing error with line information.
+//!
+//! # Core Phases
+//!
+//! 1. **Initialization**  
+//!    - `start`, `curr`, and `line` counters are set; `pending` holds the next token kind.
+//!
+//! 2. **Primitive Helpers**  
+//!    - `advance()`, `peek()`, `peek_next()`, and `match_byte()` provide fast, inlined access
+//!      to the byte stream.  
+//!    - `is_at_end()` guards against overrun.  
+//!
+//! 3. **Lexing Loop** (`next`)  
+//!    - On each call, reset `start` and `pending`, then call `scan_token()`.  
+//!    - Skip whitespace and comments (including `//` to end-of-line) without setting `pending`.  
+//!    - On recognizing a lexeme, set `pending = Some(TokenType)` and return a `Token::new(...)`.  
+//!    - At EOF, emit one `EOF` token then return `None`.  
+//!
+//! 4. **Token Recognition** (`scan_token`)  
+//!    - Single‑character tokens: `(`, `)`, `{`, `}`, `,`, `.`, `-`, `+`, `;`, `*`.  
+//!    - Two‑character operators: `!=`, `==`, `<=`, `>=`.  
+//!    - String literals: `"` … `"`, allowing multi‑line and reporting unterminated errors.  
+//!    - Numeric literals: integer and optional fractional part.  
+//!    - Identifiers/keywords: alphanumeric/_ sequences, resolved via a perfect‑hash `KEYWORDS` map.  
+//!    - Errors: any unexpected byte yields `LoxError::lex(line, message)`.  
+//!
+//! 5. **Performance Optimizations**  
+//!    - Bulk comment skipping via `memchr` for rapid new‑line search.  
+//!    - `#[inline(always)]` on hot path helpers.  
+//!    - Zero‑allocation lexeme slicing: tokens reference the original buffer.  
+//!
+//! # Example
 //!
 //! ```rust
-//! let mut scanner = Scanner::new(source_bytes);
-//! for tok in scanner {
-//!     let tok = tok?;        // <-- ? maps `LoxError` upward
-//!     println!("{tok}");
+//! let source = b\"print 123; // example\";
+//! let mut scanner = Scanner::new(source);
+//! for result in &mut scanner {
+//!     match result {
+//!         Ok(token) => println!(\"{}\", token),
+//!         Err(err)    => eprintln!(\"Lex error: {}\", err),
+//!     }
 //! }
-//! ```
-//!
-//! Because the iterator is [`FusedIterator`] it yields **exactly one** `EOF`
-//! token then terminates with `None`, making it safe to chain with `collect()`
-//! or other iterator adapters.
+//! ```  
 
 use crate::error::{LoxError, Result};
 use crate::token::{Token, TokenType};
